@@ -19,17 +19,20 @@ meta() { curl -s -H "Metadata-Flavor: Google" \
 
 BUCKET="$(meta bucket)"
 SHUTDOWN="$(meta shutdown)"; SHUTDOWN="${SHUTDOWN:-1}"
+RUNCMD="$(meta runcmd)"; RUNCMD="${RUNCMD:-python3 -u train_baseline.py}"
+JOB="$(meta jobname)"; JOB="${JOB:-train}"
 WORK="/opt/amex"
+RESULTS="$BUCKET/results/$JOB"
 
 if [[ -z "$BUCKET" ]]; then echo "FATAL: no bucket metadata"; exit 1; fi
-echo "bucket=$BUCKET work=$WORK shutdown=$SHUTDOWN"
+echo "bucket=$BUCKET work=$WORK shutdown=$SHUTDOWN job=$JOB runcmd='$RUNCMD'"
 
 # Always try to ship logs + a status marker back, whatever happens.
 finish() {
   local status="$1"
   echo "=== bootstrap finish: $status $(date -u) ==="
-  gcloud storage cp "$LOG" "$BUCKET/results/bootstrap.log" || true
-  echo "$status" | gcloud storage cp - "$BUCKET/results/_STATUS" || true
+  gcloud storage cp "$LOG" "$RESULTS/bootstrap.log" || true
+  echo "$status" | gcloud storage cp - "$RESULTS/_STATUS" || true
   if [[ "$SHUTDOWN" == "1" ]]; then sudo poweroff; fi
 }
 trap 'finish FAILED' ERR
@@ -42,7 +45,7 @@ sudo apt-get install -y -qq python3-pip python3-venv libgomp1
 # disposable VM, so install straight into it with --break-system-packages.
 PIP="python3 -m pip install --quiet --break-system-packages"
 $PIP --upgrade pip
-$PIP numpy pandas pyarrow scikit-learn lightgbm xgboost
+$PIP numpy pandas pyarrow scikit-learn lightgbm xgboost optuna
 
 # --- layout matching config.py (ROOT/src, ROOT/data/processed, ROOT/amex-default-prediction) ---
 sudo mkdir -p "$WORK" && sudo chown -R "$(whoami)" "$WORK"
@@ -55,15 +58,14 @@ gcloud storage cp "$BUCKET/data/processed/train_features.parquet" "$WORK/data/pr
 gcloud storage cp "$BUCKET/data/processed/categorical_features.txt" "$WORK/data/processed/"
 gcloud storage cp "$BUCKET/data/train_labels.csv" "$WORK/amex-default-prediction/"
 
-# --- train -----------------------------------------------------------------
+# --- run the job -----------------------------------------------------------
 cd "$WORK/src"
-echo "=== training start $(date -u) ==="
-python3 -u train_baseline.py
-echo "=== training done $(date -u) ==="
+echo "=== job '$JOB' start $(date -u): $RUNCMD ==="
+eval "$RUNCMD"
+echo "=== job done $(date -u) ==="
 
-# --- push results ----------------------------------------------------------
-gcloud storage cp "$WORK/outputs/models/"* "$BUCKET/results/models/" || true
-gcloud storage cp "$WORK/outputs/feature_importance.csv" "$BUCKET/results/" || true
-gcloud storage cp "$WORK/data/processed/oof_predictions.parquet" "$BUCKET/results/" || true
+# --- push results (everything under outputs/ + OOF) ------------------------
+gcloud storage cp -r "$WORK/outputs/"* "$RESULTS/" || true
+gcloud storage cp "$WORK/data/processed/oof_predictions.parquet" "$RESULTS/" || true
 
 finish SUCCESS
