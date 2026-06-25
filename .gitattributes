@@ -1,0 +1,8 @@
+# Normalize line endings: store text with LF in the repo.
+* text=auto eol=lf
+
+# Treat notebooks and images as the right kind.
+*.ipynb text eol=lf
+*.png binary
+*.jpg binary
+*.parquet binary

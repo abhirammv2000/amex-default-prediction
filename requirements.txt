@@ -1,0 +1,16 @@
+# Core
+numpy>=1.26
+pandas>=2.0
+pyarrow>=14.0
+
+# Modelling
+lightgbm>=4.0
+xgboost>=2.0
+scikit-learn>=1.3
+
+# EDA / viz
+matplotlib>=3.7
+seaborn>=0.12
+
+# Notebook
+jupyter
