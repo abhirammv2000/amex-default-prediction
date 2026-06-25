@@ -28,8 +28,28 @@ import pyarrow.parquet as pq
 
 import config
 
-NUM_AGGS = ["mean", "std", "min", "max", "last"]
+NUM_AGGS = ["mean", "std", "min", "max", "first", "last"]
 CAT_AGGS = ["last", "nunique", "count"]
+
+
+def _add_numeric_diffs(agg: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """Derive trend/deviation features from the per-customer aggregates.
+
+    These are computed from columns already present (no extra data pass) and
+    capture *how a customer's account is changing*, which is more predictive
+    than its level alone:
+
+      * last_mean_diff : latest value vs. the customer's own typical value
+      * last_first_diff: net movement across the whole statement history
+      * range          : volatility (max - min)
+    """
+    new = {}
+    for c in cols:
+        last, mean = agg[f"{c}_last"], agg[f"{c}_mean"]
+        new[f"{c}_last_mean_diff"] = (last - mean).astype(np.float32)
+        new[f"{c}_last_first_diff"] = (last - agg[f"{c}_first"]).astype(np.float32)
+        new[f"{c}_range"] = (agg[f"{c}_max"] - agg[f"{c}_min"]).astype(np.float32)
+    return pd.concat([agg, pd.DataFrame(new, index=agg.index)], axis=1)
 
 
 def _batched(seq, n):
@@ -70,6 +90,7 @@ def build_features(parquet_path, out_path, col_batch: int) -> None:
         tbl = pq.read_table(parquet_path, columns=cols).to_pandas()
         tbl["_cid"] = codes
         agg = _flatten(tbl.groupby("_cid")[cols].agg(NUM_AGGS).astype(np.float32))
+        agg = _add_numeric_diffs(agg, cols)
         parts.append(agg)
         print(f"  numeric batch {b}: {len(cols)} cols -> {agg.shape[1]} feats "
               f"({time.time() - t0:.0f}s)", flush=True)
@@ -105,16 +126,31 @@ def build_features(parquet_path, out_path, col_batch: int) -> None:
     gc.collect()
 
     # --- assemble ------------------------------------------------------------
-    features = pd.concat(parts, axis=1)
-    features.insert(0, config.ID_COL, uniques)
-    features = features.reset_index(drop=True)
+    # Build the wide table column-by-column in Arrow instead of pd.concat. On the
+    # 924K-customer test set the pandas block consolidation transiently doubles
+    # memory (~12 GB) and OOMs on 16 GB; converting each part to Arrow and freeing
+    # the pandas frame as we go keeps the peak near the data size (~6 GB).
+    import pyarrow as pa
+
+    n_feats = sum(p.shape[1] for p in parts)
+    arrays = {config.ID_COL: pa.array(np.asarray(uniques))}
+    for i in range(len(parts)):
+        tbl = pa.Table.from_pandas(parts[i], preserve_index=False)
+        for name in tbl.column_names:
+            arrays[name] = tbl.column(name)
+        parts[i] = None          # release the pandas part
+        del tbl
+        gc.collect()
+    del parts
+    gc.collect()
 
     # categorical-'last' column names recorded for the model
     cat_feature_names = [f"{c}_last" for c in cat_cols]
-    print(f"Final feature matrix: {features.shape[0]:,} customers x "
-          f"{features.shape[1] - 1} features")
+    print(f"Final feature matrix: {n_cust:,} customers x {n_feats} features")
 
-    features.to_parquet(out_path, index=False)
+    pq.write_table(pa.table(arrays), out_path)
+    del arrays
+    gc.collect()
     # Persist the categorical column list alongside (same names both splits).
     (config.PROCESSED_DIR / "categorical_features.txt").write_text(
         "\n".join(cat_feature_names)
