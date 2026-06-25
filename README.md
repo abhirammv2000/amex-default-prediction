@@ -120,7 +120,7 @@ raw CSV (48 GB)
 Parquet (~10 GB)
   │  feature_engineering.py  (per-customer aggregation, column-batched)
   ▼
-feature matrix (458K × ~920)
+feature matrix (458K × 1,628)
   │  train_baseline.py       (5-fold stratified CV, LightGBM)
   ▼
 models + OOF + CV score
@@ -142,40 +142,56 @@ Key hyper-parameters (see [`train_baseline.py`](src/train_baseline.py)):
 `learning_rate=0.03`, `num_leaves=128`, `feature_fraction=0.4`,
 `bagging_fraction=0.8`, `lambda_l2=2.0`.
 
+### Scaling out: cloud training
+
+Training the wide (1,628-feature) model is memory-bound on a 16 GB laptop, so
+the training step is offloaded to a **GCP spot VM** (`n2-highmem-8`, 8 vCPU /
+64 GB) — see [`cloud/`](cloud/). The workflow is fully unattended and
+fault-tolerant:
+
+* [`cloud/launch.sh`](cloud/launch.sh) enables the APIs, uploads code + the
+  feature table to a GCS bucket, and creates a **spot** VM (~$0.10–0.15/hr).
+* [`cloud/bootstrap_vm.sh`](cloud/bootstrap_vm.sh) runs as the VM **startup
+  script**: it installs the stack, pulls the data, trains, pushes the models +
+  CV metadata back to GCS with a `_STATUS` marker, and **powers the VM off** so
+  billing stops automatically.
+
+Because the job is driven by the VM (not the local session) and signals
+completion through GCS, the run survives laptop sleeps / disconnects, and the
+whole 5-fold training completes in ~10–15 minutes for a few cents.
+
 ## 6. Results
 
-**5-fold cross-validated LightGBM baseline:**
+The project is developed as a series of cross-validated iterations. Every score
+below is the **out-of-fold (OOF) Amex metric** under the same 5-fold
+StratifiedKFold split — an honest, leakage-free estimate.
 
-| Metric | Value |
-|--------|------:|
-| **OOF Amex metric** | **0.79123** |
-| Mean fold Amex | 0.79159 |
-| Std across folds | 0.00376 |
-| Per-fold | 0.79777 / 0.78899 / 0.79096 / 0.78688 / 0.79335 |
-| Features | 920 |
-| Customers (train) | 458,913 |
+| Iteration | Features | OOF Amex | Mean fold | Std | Δ |
+|-----------|---------:|---------:|----------:|----:|--:|
+| **v1** — baseline aggregations (`mean/std/min/max/last`) | 920 | 0.79123 | 0.79159 | 0.0038 | — |
+| **v2** — + trend/deviation features (`first`, `last−mean`, `last−first`, `range`) | 1,628 | **0.79266** | 0.79288 | 0.0034 | **+0.00143** |
 
 For context, the competition's **private-leaderboard winners scored ≈ 0.808**,
-and a single well-tuned LightGBM on aggregated features typically lands around
-**0.78–0.79** — so this baseline is already competitive, and the CV is tight
-(std < 0.004), meaning the estimate is stable across folds.
+and a single LightGBM on aggregated features typically lands around
+**0.78–0.79** — so this model is already competitive, and the CV is tight
+(std < 0.004), meaning the estimate is stable across folds. The **v2** trend
+features (how a customer's account is *changing*, not just its level) gave a
+clean, consistent lift — **18 of the top-100 features by gain are the new
+derived features**.
 
-**Top features by gain** (full table in `outputs/feature_importance.csv`):
+**Top features by gain** (v2, full table in `outputs/feature_importance.csv`):
 
 | Rank | Feature | Meaning |
 |-----:|---------|---------|
-| 1 | `P_2_last`  | most recent payment feature |
-| 2 | `P_2_min`   | worst payment over history |
+| 1 | `B_9_last`  | latest balance state |
+| 2 | `P_2_last`  | most recent payment feature |
 | 3 | `P_2_mean`  | average payment level |
-| 4 | `D_48_last` | latest delinquency state |
-| 5 | `D_44_last` | latest delinquency state |
-| 6 | `B_9_last`  | latest balance state |
-| 7 | `B_11_last` | latest balance state |
+| 4 | `P_2_max` / `P_2_min` | payment range over history |
+| 6 | `D_48_last` | latest delinquency state |
+| 13 | `P_2_first` | earliest payment level (new trend feature) |
 
-`P_2` dominates by a wide margin — its `last`/`min`/`mean` aggregations are the
-three strongest signals, which matches the well-documented behaviour of this
-dataset. The prevalence of `*_last` features confirms that a customer's **most
-recent statement** carries the most predictive information.
+`P_2` dominates across its aggregations, and `*_last` features confirm that a
+customer's **most recent statement** carries the most predictive signal.
 
 <p align="center">
   <img src="reports/figures/target_distribution.png" width="45%" alt="Target distribution">
@@ -194,6 +210,9 @@ amex/
 ├── .gitignore
 ├── amex-default-prediction/        # raw Kaggle CSVs (gitignored)
 ├── data/processed/                 # parquet + engineered features (gitignored)
+├── cloud/
+│   ├── launch.sh                   # provision GCP spot VM + upload via GCS
+│   └── bootstrap_vm.sh             # VM startup-script: train + push results
 ├── notebooks/
 │   └── 01_eda.ipynb                # exploratory data analysis
 ├── reports/figures/                # committed EDA + importance plots (README)
