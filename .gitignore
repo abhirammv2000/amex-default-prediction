@@ -1,0 +1,27 @@
+# ---- Data (huge — never commit) ----
+amex-default-prediction/
+data/
+*.csv
+*.parquet
+*.feather
+
+# ---- Model artifacts & large outputs (regenerable) ----
+# Note: reports/figures/ IS tracked (used in the README); only outputs/ is ignored.
+outputs/
+*.txt.model
+*.pkl
+*.joblib
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+env/
+.python-version
+
+# ---- OS / IDE ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
