@@ -68,8 +68,14 @@ def main(args) -> None:
     skf = StratifiedKFold(n_splits=config.N_FOLDS, shuffle=True,
                           random_state=config.SEED)
     tr_idx, va_idx = next(iter(skf.split(X, y)))
-    dtrain = lgb.Dataset(X.iloc[tr_idx], y[tr_idx], categorical_feature=cat_features)
-    dvalid = lgb.Dataset(X.iloc[va_idx], y[va_idx], categorical_feature=cat_features)
+    # The search Dataset is built once and reused across trials, so disable
+    # feature pre-filtering — otherwise LightGBM errors when a later trial lowers
+    # min_child_samples below the value used to bin/pre-filter the features.
+    ds_params = {"feature_pre_filter": False}
+    dtrain = lgb.Dataset(X.iloc[tr_idx], y[tr_idx], categorical_feature=cat_features,
+                         params=ds_params)
+    dvalid = lgb.Dataset(X.iloc[va_idx], y[va_idx], categorical_feature=cat_features,
+                         params=ds_params)
     y_va = y[va_idx]
 
     def objective(trial: optuna.Trial) -> float:
