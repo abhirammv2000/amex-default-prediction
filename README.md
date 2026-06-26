@@ -217,7 +217,72 @@ customer's **most recent statement** carries the most predictive signal.
   <img src="reports/figures/feature_importance.png" width="60%" alt="Top features by gain">
 </p>
 
-## 7. Repository layout
+## 7. From Kaggle metric to a deployable credit-risk model
+
+The competition metric only measures **rank ordering**. A model used for real
+lending decisions has to clear a higher bar — so this section treats the model as
+a credit scorecard and asks the questions a model-risk team would. All numbers
+are computed on the **out-of-fold** predictions ([`evaluate_risk.py`](src/evaluate_risk.py),
+[`explain.py`](src/explain.py), [`drift.py`](src/drift.py)).
+
+**Discrimination & business value**
+
+| Metric | Value | Reading |
+|--------|------:|---------|
+| AUC | 0.962 | strong rank-ordering |
+| Gini | 0.923 | |
+| **KS statistic** | **0.795** | excellent good/bad separation |
+| Top-decile capture | **37%** of all defaults | the riskiest 10% of customers |
+| Top-3-decile capture | **88%** of all defaults | |
+
+The riskiest decile has a **96% default rate** vs **0.1%** in the safest — the
+score concentrates risk sharply (see `reports/figures/score_bands.png` and the
+approval-rate vs bad-rate trade-off in `approval_tradeoff.png`).
+
+**Calibration.** Isotonic recalibration barely moves the Brier score
+(0.0679 → 0.0679), i.e. **LightGBM's raw probabilities are already well
+calibrated** — they can be used directly as PDs for pricing / loss provisioning
+rather than only as a ranking. (`calibration.png`)
+
+**Explainability (reason codes).** Tree **SHAP** gives exact per-customer
+attributions for adverse-action reasoning. For high-risk customers the top
+drivers are a low latest payment (`P_2_last`), high delinquency (`D_39_last`),
+and — notably — **rising** delinquency (`D_39_last_mean_diff`, one of the v2
+trend features), confirming the engineered signal is what the model actually
+uses. (`shap_summary.png`)
+
+**Stability / drift monitoring.** Every training customer is observed in the same
+month (March 2018), so a classic out-of-time split isn't available in-sample;
+instead we treat the later **test** set as the out-of-time population and monitor
+**PSI**. **94% of features are stable** and the **model score PSI is 0.015**
+(very stable) — so the cross-validated estimate should transfer to the test
+period. Drift monitoring also *caught a real bug*: two categorical features
+showed extreme PSI, which turned out to be a **train/test label-encoding
+inconsistency** (codes were fit independently per split). Fixed in
+[`feature_engineering.py`](src/feature_engineering.py) by fitting the category
+maps on train and persisting them for test — exactly the class of silent defect
+monitoring exists to surface. (`score_drift.png`, `reports/drift_psi.csv`)
+
+<p align="center">
+  <img src="reports/figures/score_bands.png" width="45%" alt="Default rate by risk decile">
+  <img src="reports/figures/calibration.png" width="45%" alt="Calibration curve">
+</p>
+
+### Model card (summary)
+
+* **Intended use:** rank/score customers by probability of future default to
+  support credit decisioning; **not** a sole automated decision system.
+* **Training data:** 458,913 customers, 13 monthly statements each, observed
+  March 2018; 25.9% default rate.
+* **Performance:** OOF Amex 0.793 (blend), AUC 0.962, KS 0.795, well-calibrated.
+* **Limitations:** features are anonymized, so **protected-attribute fairness
+  testing isn't possible on this dataset** — in production a disparate-impact
+  analysis across protected classes would be required before deployment.
+  Single observation window limits in-sample temporal validation.
+* **Monitoring:** track feature & score PSI vs the training population; re-fit /
+  recalibrate if score PSI > 0.1 or material feature drift appears.
+
+## 8. Repository layout
 
 ```
 amex/
@@ -248,10 +313,14 @@ amex/
     ├── train_xgb.py                # 5-fold XGBoost (aligned folds for blending)
     ├── blend.py                    # OOF-optimal LGB+XGB blend -> submission
     ├── reconstruct_oof_xgb.py      # rebuild XGB OOF from saved fold models
-    └── predict.py                  # build submission from fold models
+    ├── predict.py                  # build submission from fold models
+    ├── evaluate_risk.py            # calibration + KS / decile / approval metrics
+    ├── explain.py                  # SHAP global importance + reason codes
+    ├── drift.py                    # train->test PSI stability monitoring
+    └── extract_customer_dates.py   # per-customer last-statement date
 ```
 
-## 8. How to run
+## 9. How to run
 
 ```bash
 # 0. environment
@@ -277,6 +346,11 @@ python src/blend.py                        # OOF-optimal blend -> submission_ble
 # 6. (optional) EDA figures / single-model submission
 python src/eda.py
 python src/predict.py
+
+# 7. credit-risk evaluation (calibration, KS, SHAP reason codes, PSI drift)
+python src/evaluate_risk.py
+python src/explain.py --sample 20000
+python src/drift.py
 ```
 
 > **Heavy steps run on the cloud.** Training the 1,628-feature models is
@@ -286,7 +360,7 @@ python src/predict.py
 >   RUNCMD="python3 -u train_xgb.py" bash cloud/launch.sh
 > ```
 
-## 9. Next steps
+## 10. Next steps
 
 Done so far: trend/deviation features ✓, Optuna tuning ✓ (no gain — see v3),
 XGBoost + blend ✓. Promising directions from here:
@@ -301,7 +375,7 @@ XGBoost + blend ✓. Promising directions from here:
 * **`dart` boosting** and **knowledge-distillation / pseudo-labelling** on the
   large test set.
 
-## 10. Acknowledgements
+## 11. Acknowledgements
 
 * American Express & Kaggle for the competition and dataset.
 * The Kaggle community for the public reference metric implementation.

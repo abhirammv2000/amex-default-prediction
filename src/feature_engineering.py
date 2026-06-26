@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import json
 import time
 
 import numpy as np
@@ -62,7 +63,7 @@ def _flatten(agg: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
-def build_features(parquet_path, out_path, col_batch: int) -> None:
+def build_features(parquet_path, out_path, col_batch: int, is_train: bool) -> None:
     pf = pq.ParquetFile(parquet_path)
     all_cols = [c for c in pf.schema.names]
     feature_cols = [c for c in all_cols if c not in config.NON_FEATURE_COLS]
@@ -101,10 +102,27 @@ def build_features(parquet_path, out_path, col_batch: int) -> None:
     tbl = pq.read_table(parquet_path, columns=cat_cols).to_pandas()
     tbl["_cid"] = codes
     cat_agg = _flatten(tbl.groupby("_cid")[cat_cols].agg(CAT_AGGS))
-    # 'last' of categoricals may be string/float codes -> label-encode to int16
-    for c in cat_cols:
-        col = f"{c}_last"
-        cat_agg[col] = cat_agg[col].astype("category").cat.codes.astype(np.int16)
+    # 'last' of categoricals may be string/float codes -> label-encode to int16.
+    # The mapping is FIT ON TRAIN and persisted, then applied to test, so a code
+    # means the same category in both splits (encoding it independently per split
+    # silently misaligns codes — caught by PSI drift monitoring, see drift.py).
+    map_path = config.PROCESSED_DIR / "categorical_maps.json"
+    if is_train:
+        maps = {}
+        for c in cat_cols:
+            col = f"{c}_last"
+            cats = pd.Categorical(cat_agg[col])
+            maps[c] = [None if pd.isna(v) else str(v) for v in cats.categories]
+            cat_agg[col] = cats.codes.astype(np.int16)
+        map_path.write_text(json.dumps(maps))
+    else:
+        maps = json.loads(map_path.read_text())
+        for c in cat_cols:
+            col = f"{c}_last"
+            lookup = {v: i for i, v in enumerate(maps[c]) if v is not None}
+            cat_agg[col] = (cat_agg[col].astype("object")
+                            .map(lambda v: lookup.get(None if pd.isna(v) else str(v), -1))
+                            .astype(np.int16))
     num_like = [c for c in cat_agg.columns if not c.endswith("_last")]
     cat_agg[num_like] = cat_agg[num_like].astype(np.float32)
     parts.append(cat_agg)
@@ -165,7 +183,11 @@ if __name__ == "__main__":
     ap.add_argument("--col-batch", type=int, default=40)
     args = ap.parse_args()
 
+    # Train must be built first: it fits and persists the categorical maps that
+    # test then reuses (so codes mean the same category in both splits).
     if args.which in ("train", "both"):
-        build_features(config.TRAIN_PARQUET, config.TRAIN_FEATURES, args.col_batch)
+        build_features(config.TRAIN_PARQUET, config.TRAIN_FEATURES, args.col_batch,
+                       is_train=True)
     if args.which in ("test", "both"):
-        build_features(config.TEST_PARQUET, config.TEST_FEATURES, args.col_batch)
+        build_features(config.TEST_PARQUET, config.TEST_FEATURES, args.col_batch,
+                       is_train=False)
