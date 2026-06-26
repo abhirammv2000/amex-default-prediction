@@ -137,6 +137,10 @@ submission.csv
 * **Categorical features** passed natively to LightGBM.
 * Out-of-fold (OOF) predictions give an honest CV estimate; test predictions
   average the five fold models.
+* **Ensembling:** a second family (**XGBoost**) is trained on the *same* fold
+  splits so its OOF aligns row-for-row, then [`blend.py`](src/blend.py) picks the
+  LGB/XGB weight that maximises the Amex metric **on OOF** (not the test set) and
+  applies it to the test predictions — see iterations v4a/v4b below.
 
 Key hyper-parameters (see [`train_baseline.py`](src/train_baseline.py)):
 `learning_rate=0.03`, `num_leaves=128`, `feature_fraction=0.4`,
@@ -166,18 +170,30 @@ The project is developed as a series of cross-validated iterations. Every score
 below is the **out-of-fold (OOF) Amex metric** under the same 5-fold
 StratifiedKFold split — an honest, leakage-free estimate.
 
-| Iteration | Features | OOF Amex | Mean fold | Std | Δ |
-|-----------|---------:|---------:|----------:|----:|--:|
-| **v1** — baseline aggregations (`mean/std/min/max/last`) | 920 | 0.79123 | 0.79159 | 0.0038 | — |
-| **v2** — + trend/deviation features (`first`, `last−mean`, `last−first`, `range`) | 1,628 | **0.79266** | 0.79288 | 0.0034 | **+0.00143** |
+| Iteration | Model / change | OOF Amex | Δ vs prev best |
+|-----------|----------------|---------:|---------------:|
+| **v1** — baseline aggregations (`mean/std/min/max/last`), 920 feats | LightGBM | 0.79123 | — |
+| **v2** — + trend/deviation features (`first`, `last−mean`, `last−first`, `range`), 1,628 feats | LightGBM | **0.79266** | **+0.00143** |
+| **v3** — Optuna hyper-parameter search (9 trials) | LightGBM | 0.79247 | −0.00019 |
+| **v4a** — second model family | XGBoost | 0.79064 | — |
+| **v4b** — weighted blend (0.86·LGB + 0.14·XGB) | **LGB + XGB** | **0.79294** | **+0.00028** |
 
 For context, the competition's **private-leaderboard winners scored ≈ 0.808**,
 and a single LightGBM on aggregated features typically lands around
 **0.78–0.79** — so this model is already competitive, and the CV is tight
-(std < 0.004), meaning the estimate is stable across folds. The **v2** trend
-features (how a customer's account is *changing*, not just its level) gave a
-clean, consistent lift — **18 of the top-100 features by gain are the new
-derived features**.
+(std < 0.004), meaning the estimate is stable across folds.
+
+**Reading the iterations honestly:**
+* **v2** (trend features) was the biggest lever — capturing how a customer's
+  account is *changing*, not just its level. **18 of the top-100 features by gain
+  are the new derived features.**
+* **v3** (tuning) **did not improve** the score: the Optuna search only completed
+  9 trials inside its time budget (each trial is slow on 1,628 features), and the
+  hand-chosen baseline params were already near-optimal. A negative result, kept
+  in the table for transparency.
+* **v4** (blend) gave a small but real lift. XGBoost is the weaker solo model, but
+  it is **decorrelated** enough from LightGBM that a 0.86/0.14 blend — with the
+  weight chosen on OOF, not the test set — beats either alone.
 
 **Top features by gain** (v2, full table in `outputs/feature_importance.csv`):
 
@@ -228,6 +244,10 @@ amex/
     ├── convert_to_parquet.py       # CSV -> downcast Parquet (chunked)
     ├── feature_engineering.py      # per-customer aggregation
     ├── train_baseline.py           # 5-fold LightGBM CV
+    ├── tune.py                     # Optuna search + tuned 5-fold retrain
+    ├── train_xgb.py                # 5-fold XGBoost (aligned folds for blending)
+    ├── blend.py                    # OOF-optimal LGB+XGB blend -> submission
+    ├── reconstruct_oof_xgb.py      # rebuild XGB OOF from saved fold models
     └── predict.py                  # build submission from fold models
 ```
 
@@ -249,22 +269,37 @@ python src/feature_engineering.py --which both
 # 4. train the 5-fold LightGBM baseline (prints CV Amex score)
 python src/train_baseline.py
 
-# 5. (optional) EDA figures
-python src/eda.py
+# 5. (optional) second model + ensemble
+python src/tune.py --n-trials 50          # Optuna-tuned LightGBM
+python src/train_xgb.py                    # XGBoost on the same folds
+python src/blend.py                        # OOF-optimal blend -> submission_blend.csv
 
-# 6. generate the submission
+# 6. (optional) EDA figures / single-model submission
+python src/eda.py
 python src/predict.py
 ```
 
-## 9. Next steps (beyond the baseline)
+> **Heavy steps run on the cloud.** Training the 1,628-feature models is
+> memory-bound on a 16 GB laptop, so they are launched on a GCP VM, e.g.:
+> ```bash
+> JOB=xgb MACHINE=n2-highmem-8 PROVISIONING=STANDARD \
+>   RUNCMD="python3 -u train_xgb.py" bash cloud/launch.sh
+> ```
 
-* **Richer features:** last−mean / last−first diffs, lag-1 deltas, per-feature
-  trends/slopes, "round-number" payment flags, and `after-pay` features
-  (balance minus payment) that ranked highly in winning solutions.
-* **Model diversity:** XGBoost + CatBoost + a GRU/Transformer over the raw
-  monthly sequence, then blend.
-* **`dart` boosting** and Optuna hyper-parameter search.
-* **Knowledge-distillation / pseudo-labelling** on the large test set.
+## 9. Next steps
+
+Done so far: trend/deviation features ✓, Optuna tuning ✓ (no gain — see v3),
+XGBoost + blend ✓. Promising directions from here:
+
+* **More features:** lag-1 deltas, per-feature slopes, "round-number" payment
+  flags, and `after-pay` features (balance − payment) that ranked highly in
+  winning solutions.
+* **CatBoost** as a third blend partner (handles the categoricals natively) and a
+  **GRU/Transformer** over the raw monthly sequence for true model diversity.
+* **A longer tuning budget** — v3 only fit 9 Optuna trials; a multi-hour search
+  (or tuning on a single fold at lower learning rate) may yet find gains.
+* **`dart` boosting** and **knowledge-distillation / pseudo-labelling** on the
+  large test set.
 
 ## 10. Acknowledgements
 

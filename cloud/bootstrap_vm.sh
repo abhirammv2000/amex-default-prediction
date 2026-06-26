@@ -16,6 +16,8 @@ echo "=== bootstrap start $(date -u) ==="
 
 meta() { curl -s -H "Metadata-Flavor: Google" \
   "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1"; }
+meta_root() { curl -s -H "Metadata-Flavor: Google" \
+  "http://metadata.google.internal/computeMetadata/v1/instance/$1"; }
 
 BUCKET="$(meta bucket)"
 SHUTDOWN="$(meta shutdown)"; SHUTDOWN="${SHUTDOWN:-1}"
@@ -33,7 +35,14 @@ finish() {
   echo "=== bootstrap finish: $status $(date -u) ==="
   gcloud storage cp "$LOG" "$RESULTS/bootstrap.log" || true
   echo "$status" | gcloud storage cp - "$RESULTS/_STATUS" || true
-  if [[ "$SHUTDOWN" == "1" ]]; then sudo poweroff; fi
+  if [[ "$SHUTDOWN" == "1" ]]; then
+    # Self-delete so no stopped VM or orphaned boot disk lingers (and the name is
+    # free to reuse); fall back to power-off if the delete call fails.
+    local name zone
+    name="$(meta_root name)"
+    zone="$(meta_root zone | awk -F/ '{print $NF}')"
+    gcloud compute instances delete "$name" --zone="$zone" -q || sudo poweroff
+  fi
 }
 trap 'finish FAILED' ERR
 
@@ -66,6 +75,8 @@ echo "=== job done $(date -u) ==="
 
 # --- push results (everything under outputs/ + OOF) ------------------------
 gcloud storage cp -r "$WORK/outputs/"* "$RESULTS/" || true
-gcloud storage cp "$WORK/data/processed/oof_predictions.parquet" "$RESULTS/" || true
+# OOF parquet(s) live under data/processed, not outputs (oof_predictions.parquet,
+# oof_xgb.parquet, ...). Push them all so blending has every model's OOF.
+gcloud storage cp "$WORK/data/processed/"oof*.parquet "$RESULTS/" || true
 
 finish SUCCESS

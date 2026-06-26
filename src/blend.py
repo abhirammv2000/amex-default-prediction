@@ -61,12 +61,22 @@ def main() -> None:
     for m in lgb_models:
         p_test_lgb += lgb.Booster(model_file=str(m)).predict(X) / len(lgb_models)
 
+    # Predict XGB in row-chunks: a single DMatrix over all 924K x 1628 float32
+    # rows exhausts 16 GB RAM, so build it ~150K rows at a time from numpy.
     xgb_models = sorted(config.MODEL_DIR.glob("xgb_fold*.json"))
-    dtest = xgb.DMatrix(X.astype(np.float32))
-    p_test_xgb = np.zeros(len(X))
+    boosters = []
     for m in xgb_models:
-        booster = xgb.Booster(); booster.load_model(str(m))
-        p_test_xgb += booster.predict(dtest) / len(xgb_models)
+        b = xgb.Booster(); b.load_model(str(m)); boosters.append(b)
+    p_test_xgb = np.zeros(len(X))
+    chunk = 150_000
+    for start in range(0, len(X), chunk):
+        block = X.iloc[start:start + chunk].to_numpy(dtype=np.float32)
+        # Models were trained from a named DataFrame, so the DMatrix needs the
+        # same feature_names (numpy arrays carry none).
+        dblock = xgb.DMatrix(block, feature_names=feats)
+        for b in boosters:
+            p_test_xgb[start:start + len(block)] += b.predict(dblock) / len(boosters)
+        del block, dblock
 
     p_final = best_w * p_test_lgb + (1 - best_w) * p_test_xgb
     out = config.SUBMISSION_DIR / "submission_blend.csv"

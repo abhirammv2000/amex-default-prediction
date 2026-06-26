@@ -13,8 +13,9 @@ set -euo pipefail
 # ---- config (override via env) --------------------------------------------
 PROJECT="$(gcloud config get-value project 2>/dev/null)"
 REGION="us-central1"
-ZONE="us-central1-a"
-MACHINE="n2-highmem-8"                       # 8 vCPU, 64 GB RAM
+ZONE="${ZONE:-us-central1-a}"
+MACHINE="${MACHINE:-n2-highmem-8}"           # default 8 vCPU, 64 GB RAM
+PROVISIONING="${PROVISIONING:-SPOT}"         # SPOT (cheap) or STANDARD (no preemption)
 JOB="${JOB:-train}"
 RUNCMD="${RUNCMD:-python3 -u train_baseline.py}"
 VM="amex-${JOB}"
@@ -46,9 +47,18 @@ fi
 gcloud storage rm "$BUCKET/results/$JOB/_STATUS" 2>/dev/null || true
 
 # ---- create the spot VM with the job startup-script -----------------------
+# Remove any same-named VM left over from a previous run (e.g. a spot preemption
+# that skipped the self-delete hook) so the create below doesn't name-clash.
+gcloud compute instances delete "$VM" --zone="$ZONE" -q 2>/dev/null || true
+# Spot is ~4x cheaper but can be preempted (bad for long jobs); STANDARD won't be.
+if [[ "$PROVISIONING" == "SPOT" ]]; then
+  PROV_FLAGS=(--provisioning-model=SPOT --instance-termination-action=STOP)
+else
+  PROV_FLAGS=(--provisioning-model=STANDARD)
+fi
 gcloud compute instances create "$VM" \
   --project="$PROJECT" --zone="$ZONE" --machine-type="$MACHINE" \
-  --provisioning-model=SPOT --instance-termination-action=STOP \
+  "${PROV_FLAGS[@]}" \
   --image-family=debian-12 --image-project=debian-cloud \
   --boot-disk-size=60GB --boot-disk-type=pd-balanced \
   --scopes=cloud-platform \
