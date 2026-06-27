@@ -1,0 +1,27 @@
+[
+  {
+    "label": "Very low risk",
+    "customer_ID": "d72ddf18e63a85779128bd71c079f61e25f1b597b1ed65ee23cb12345e53a3e5",
+    "pd": 0.020416
+  },
+  {
+    "label": "Low risk",
+    "customer_ID": "9dc6f60a1f4a30e37855e507b48cf808819ce48ecb031b5e6c6cb9b968aa9d75",
+    "pd": 0.120747
+  },
+  {
+    "label": "Medium risk",
+    "customer_ID": "51ddb1fe6b488325182adcb77382ebd3f36b794704a31a711f584205e5bdd680",
+    "pd": 0.350158
+  },
+  {
+    "label": "High risk",
+    "customer_ID": "0002ee29f6d40961db64f5eab8e9d5863c480fd0489bf95c0e4e0f2921f6a6f8",
+    "pd": 0.644258
+  },
+  {
+    "label": "Very high risk",
+    "customer_ID": "503a56931a8810b683814aa0eb135cc01cc2b837de9c1c99fe8eb6e28d2ce55e",
+    "pd": 0.929733
+  }
+]
