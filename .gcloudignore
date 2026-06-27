@@ -1,0 +1,14 @@
+# Keep Cloud Build context tiny — never upload data or git history.
+.git/
+amex-default-prediction/
+data/
+outputs/
+notebooks/
+reports/
+*.parquet
+*.npz
+*.csv
+__pycache__/
+*.pyc
+# Needed in the image (override the *.csv-style ignores above):
+!serving/artifacts/

@@ -6,10 +6,10 @@ implements an end-to-end, memory-efficient machine-learning pipeline for the
 [Kaggle *American Express - Default Prediction*](https://www.kaggle.com/competitions/amex-default-prediction)
 competition and reports a strong, fully cross-validated **LightGBM baseline**.
 
-> **Status:** End-to-end pipeline complete — data → features → tuned GBDTs →
-> credit-risk evaluation (calibration, SHAP, drift) → GRU sequence model →
-> **3-way LGB+XGB+GRU blend (OOF Amex 0.795)**. Deployment/serving is
-> intentionally out of scope for this stage.
+> **Status:** End-to-end, **including deployment** — data → features → tuned
+> GBDTs → credit-risk evaluation (calibration, SHAP, drift) → GRU sequence model
+> → 3-way blend (OOF Amex 0.795) → a **calibrated, explainable inference API
+> deployed live on Google Cloud Run**. See [`serving/`](serving/).
 
 ### Highlights
 
@@ -306,7 +306,42 @@ monitoring exists to surface. (`score_drift.png`, `reports/drift_psi.csv`)
 * **Monitoring:** track feature & score PSI vs the training population; re-fit /
   recalibrate if score PSI > 0.1 or material feature drift appears.
 
-## 8. Repository layout
+## 8. Deployment — a live, explainable inference API
+
+The model is deployed as a containerized **FastAPI** service on **Google Cloud
+Run** (serverless, scales to zero). It takes a customer's raw monthly statements
+and returns a **calibrated probability of default**, a **risk band**, and
+**SHAP adverse-action reason codes**. Full design in [`serving/`](serving/).
+
+```bash
+curl -s $URL/score -H 'content-type: application/json' -d '{"statements":[
+  {"customer_ID":"c1","S_2":"2018-01-31","P_2":0.55,"B_1":0.02,"D_39":0.1},
+  {"customer_ID":"c1","S_2":"2018-02-28","P_2":0.30,"B_1":0.10,"D_39":1.2},
+  {"customer_ID":"c1","S_2":"2018-03-31","P_2":0.05,"B_1":0.40,"D_39":2.6}]}'
+```
+```json
+{ "results": [{ "probability_of_default": 0.866, "risk_band": "very high",
+  "top_reason_codes": [
+    {"feature":"P_2_last","description":"most recent payment (P_2)","contribution":0.88},
+    {"feature":"D_39_last","description":"most recent delinquency (D_39)","contribution":0.74}]}]}
+```
+
+What this part demonstrates (the production-engineering signal):
+
+* **No training/serving skew** — the API runs the *same* feature-engineering code
+  as training ([`serving/app/pipeline.py`](serving/app/pipeline.py)); a test
+  ([`serving/tests/test_pipeline.py`](serving/tests/test_pipeline.py)) asserts the
+  online features match the offline training table **row-for-row**.
+* **Serve the calibrated single LightGBM**, not the research blend — fast,
+  well-calibrated PDs, and explainable (the honest production choice).
+* **Explainability in the response** — SHAP reason codes for adverse-action (ECOA).
+* **Observability** — Prometheus `/metrics` + structured prediction logs feeding
+  the offline PSI drift job.
+* **Tested + containerized + CI/CD** — pytest suite, multi-stage Dockerfile, and a
+  GitHub Actions pipeline ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+  that tests, builds, and deploys.
+
+## 9. Repository layout
 
 ```
 amex/
@@ -348,7 +383,7 @@ amex/
     └── blend3.py                   # final 3-way LGB+XGB+GRU blend -> submission
 ```
 
-## 9. How to run
+## 10. How to run
 
 ```bash
 # 0. environment
@@ -394,7 +429,7 @@ python src/blend3.py                           # final LGB+XGB+GRU submission
 >   RUNCMD="python3 -u train_xgb.py" bash cloud/launch.sh
 > ```
 
-## 10. Next steps
+## 11. Next steps
 
 Done so far: trend/deviation features ✓, Optuna tuning ✓ (no gain — see v3),
 XGBoost + blend ✓. Promising directions from here:
@@ -409,7 +444,7 @@ XGBoost + blend ✓. Promising directions from here:
 * **`dart` boosting** and **knowledge-distillation / pseudo-labelling** on the
   large test set.
 
-## 11. Acknowledgements
+## 12. Acknowledgements
 
 * American Express & Kaggle for the competition and dataset.
 * The Kaggle community for the public reference metric implementation.
