@@ -388,28 +388,26 @@ amex/
 ├── outputs/                        # large regenerable artifacts (gitignored)
 │   ├── models/                     # per-fold LightGBM models + cv_metadata.json
 │   └── submissions/                # submission CSVs
-└── src/
-    ├── config.py                   # paths, column lists, constants
-    ├── metric.py                   # official Amex metric (+ self-test)
-    ├── profile_data.py             # quick sample profiling + metric test
-    ├── eda.py                      # generates EDA figures
-    ├── plot_importance.py          # feature-importance plot
-    ├── convert_to_parquet.py       # CSV -> downcast Parquet (chunked)
-    ├── feature_engineering.py      # per-customer aggregation
-    ├── train_baseline.py           # 5-fold LightGBM CV
-    ├── tune.py                     # Optuna search + tuned 5-fold retrain
-    ├── train_xgb.py                # 5-fold XGBoost (aligned folds for blending)
-    ├── blend.py                    # OOF-optimal LGB+XGB blend -> submission
-    ├── reconstruct_oof_xgb.py      # rebuild XGB OOF from saved fold models
-    ├── predict.py                  # build submission from fold models
-    ├── evaluate_risk.py            # calibration + KS / decile / approval metrics
-    ├── explain.py                  # SHAP global importance + reason codes
-    ├── drift.py                    # train->test PSI stability monitoring
-    ├── extract_customer_dates.py   # per-customer last-statement date
-    ├── build_sequences.py          # raw [N,13,188] tensors (streaming, memory-safe)
-    ├── train_gru.py                # 5-fold GRU over the statement sequences (GPU)
-    ├── gru_predict.py              # GRU test predictions from saved folds
-    └── blend3.py                   # final 3-way LGB+XGB+GRU blend -> submission
+├── .github/workflows/ci.yml        # CI/CD: lint, test, build, deploy
+├── src/                            # offline pipeline (data → features → models)
+│   ├── config.py · metric.py · profile_data.py · eda.py · plot_importance.py
+│   ├── convert_to_parquet.py · feature_engineering.py        # data + features
+│   ├── train_baseline.py · tune.py · train_xgb.py · blend.py # GBDTs + blend
+│   ├── build_sequences.py · train_gru.py · gru_predict.py · blend3.py  # GRU + 3-way
+│   ├── predict.py · reconstruct_oof_xgb.py · extract_customer_dates.py
+│   └── evaluate_risk.py · explain.py · drift.py             # credit-risk eval
+└── serving/                        # deployment (shares model + feature code)
+    ├── app/
+    │   ├── pipeline.py             # shared feature engineering (no train/serve skew)
+    │   ├── model.py                # load, calibrate, score, SHAP reason codes
+    │   ├── main.py · schemas.py    # FastAPI service + Pydantic contract
+    │   ├── monitoring.py           # structured logs + Prometheus metrics
+    │   └── batch_score.py          # batch portfolio scoring (primary deployment)
+    ├── artifacts/                  # served model.txt + calibrator + feature names
+    ├── demo/                       # Streamlit analyst dashboard (live on Cloud Run)
+    ├── tests/                      # pytest: skew proof, API, batch
+    ├── Dockerfile · deploy_cloudrun.sh · train_serving_model.py
+    └── README.md                   # deployment design + architecture
 ```
 
 ## 10. How to run
