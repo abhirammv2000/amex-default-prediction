@@ -85,6 +85,23 @@ curl -s localhost:8080/score -H 'content-type: application/json' -d '{
 }
 ```
 
+## Interactive demo (analyst dashboard)
+
+**Live:** https://amex-risk-demo-634289062173.us-central1.run.app
+
+A **Streamlit** dashboard ([`demo/streamlit_app.py`](demo/streamlit_app.py)) is
+the human-facing surface a risk analyst would use for a single account: pick a
+real customer, see their **PD gauge**, **risk band**, **SHAP reason codes**, and
+**payment trajectory**, and run **what-if** scenarios on the latest statement
+(e.g. dropping the recent payment drives the PD up and surfaces "rising
+delinquency" as a reason). It calls the same `CreditModel` + feature code as the
+API and batch job, so its numbers match production.
+
+```bash
+streamlit run serving/demo/streamlit_app.py          # local
+bash serving/demo/deploy_streamlit.sh                # -> Cloud Run (scales to zero)
+```
+
 ## Run locally
 
 ```bash
