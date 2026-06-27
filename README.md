@@ -6,8 +6,10 @@ implements an end-to-end, memory-efficient machine-learning pipeline for the
 [Kaggle *American Express - Default Prediction*](https://www.kaggle.com/competitions/amex-default-prediction)
 competition and reports a strong, fully cross-validated **LightGBM baseline**.
 
-> **Status:** Baseline complete (data pipeline → features → CV model → submission).
-> Deployment/serving is intentionally out of scope for this stage.
+> **Status:** End-to-end pipeline complete — data → features → tuned GBDTs →
+> credit-risk evaluation (calibration, SHAP, drift) → GRU sequence model →
+> **3-way LGB+XGB+GRU blend (OOF Amex 0.795)**. Deployment/serving is
+> intentionally out of scope for this stage.
 
 ### Highlights
 
@@ -177,6 +179,8 @@ StratifiedKFold split — an honest, leakage-free estimate.
 | **v3** — Optuna hyper-parameter search (9 trials) | LightGBM | 0.79247 | −0.00019 |
 | **v4a** — second model family | XGBoost | 0.79064 | — |
 | **v4b** — weighted blend (0.86·LGB + 0.14·XGB) | **LGB + XGB** | **0.79294** | **+0.00028** |
+| **v5a** — deep sequence model over the raw 13-month statements | GRU | 0.78671 | — |
+| **v5b** — 3-way blend (0.60·LGB + 0.08·XGB + 0.32·GRU) | **LGB + XGB + GRU** | **0.79545** | **+0.00251** |
 
 For context, the competition's **private-leaderboard winners scored ≈ 0.808**,
 and a single LightGBM on aggregated features typically lands around
@@ -194,6 +198,26 @@ and a single LightGBM on aggregated features typically lands around
 * **v4** (blend) gave a small but real lift. XGBoost is the weaker solo model, but
   it is **decorrelated** enough from LightGBM that a 0.86/0.14 blend — with the
   weight chosen on OOF, not the test set — beats either alone.
+* **v5** (deep learning) was the **biggest single jump after v2**, and the most
+  interesting result. A **GRU over the raw 13-month statement sequences** (no
+  aggregation) is the *weakest* solo model (0.78671), yet adding it lifts the
+  blend to **0.79545 (+0.0025)**. Why: the GBDTs are nearly redundant with each
+  other (LGB↔XGB correlation **0.995**), whereas the GRU is a different model
+  *family* and correlates only **0.983** — so the OOF-optimal blend gives it
+  **32% weight** despite its lower solo score. The lesson is the real-world one:
+  a sequence model isn't the production model of record here, but it's a genuine
+  **diversifier** that an ensemble benefits from.
+
+### Deep-learning model (the temporal view)
+
+The GBDT pipeline aggregates each customer's history away (`mean/last/…`). The
+GRU instead consumes the **raw `[13 months × 188 features]` sequence** with a
+mask for customers who have fewer than 13 statements, learning temporal patterns
+the aggregations can't express. It is trained on the **same 5-fold split** so its
+OOF aligns row-for-row for blending, on a **GCP L4 GPU** (~6 min, driven
+interactively over SSH). See [`build_sequences.py`](src/build_sequences.py)
+(memory-safe streaming build of the `[N, 13, 188]` tensors),
+[`train_gru.py`](src/train_gru.py), and [`gru_predict.py`](src/gru_predict.py).
 
 **Top features by gain** (v2, full table in `outputs/feature_importance.csv`):
 
@@ -317,7 +341,11 @@ amex/
     ├── evaluate_risk.py            # calibration + KS / decile / approval metrics
     ├── explain.py                  # SHAP global importance + reason codes
     ├── drift.py                    # train->test PSI stability monitoring
-    └── extract_customer_dates.py   # per-customer last-statement date
+    ├── extract_customer_dates.py   # per-customer last-statement date
+    ├── build_sequences.py          # raw [N,13,188] tensors (streaming, memory-safe)
+    ├── train_gru.py                # 5-fold GRU over the statement sequences (GPU)
+    ├── gru_predict.py              # GRU test predictions from saved folds
+    └── blend3.py                   # final 3-way LGB+XGB+GRU blend -> submission
 ```
 
 ## 9. How to run
@@ -351,6 +379,12 @@ python src/predict.py
 python src/evaluate_risk.py
 python src/explain.py --sample 20000
 python src/drift.py
+
+# 8. (optional) deep-learning sequence model + 3-way blend
+python src/build_sequences.py --which both     # raw [N,13,188] tensors
+python src/train_gru.py --epochs 20            # GRU 5-fold (GPU recommended)
+python src/gru_predict.py                      # GRU test predictions
+python src/blend3.py                           # final LGB+XGB+GRU submission
 ```
 
 > **Heavy steps run on the cloud.** Training the 1,628-feature models is

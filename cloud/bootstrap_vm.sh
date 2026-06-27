@@ -23,6 +23,14 @@ BUCKET="$(meta bucket)"
 SHUTDOWN="$(meta shutdown)"; SHUTDOWN="${SHUTDOWN:-1}"
 RUNCMD="$(meta runcmd)"; RUNCMD="${RUNCMD:-python3 -u train_baseline.py}"
 JOB="$(meta jobname)"; JOB="${JOB:-train}"
+# Configurable so one image serves CPU (debian+pip) and GPU (Deep-Learning VM)
+# jobs: PY=interpreter, PIPDEPS=packages to install (empty to skip), INPUTS=GCS
+# sub-paths (relative to bucket) to mirror locally.
+PY="$(meta python)"; PY="${PY:-python3}"
+PIPDEPS="$(meta pipdeps)"
+PIPDEPS="${PIPDEPS-numpy pandas pyarrow scikit-learn lightgbm xgboost optuna}"
+INPUTS="$(meta inputs)"
+INPUTS="${INPUTS:-data/processed/train_features.parquet data/processed/categorical_features.txt data/train_labels.csv}"
 WORK="/opt/amex"
 RESULTS="$BUCKET/results/$JOB"
 
@@ -46,26 +54,55 @@ finish() {
 }
 trap 'finish FAILED' ERR
 
-# --- system deps -----------------------------------------------------------
-export DEBIAN_FRONTEND=noninteractive
-sudo apt-get update -qq
-sudo apt-get install -y -qq python3-pip python3-venv libgomp1
-# Debian 12 marks the system Python as externally managed (PEP 668); this is a
-# disposable VM, so install straight into it with --break-system-packages.
-PIP="python3 -m pip install --quiet --break-system-packages"
-$PIP --upgrade pip
-$PIP numpy pandas pyarrow scikit-learn lightgbm xgboost optuna
+# --- resolve a torch-capable interpreter on GPU images (path varies by image) --
+if [[ "$(meta install-nvidia-driver)" == "True" ]]; then
+  for cand in /opt/conda/bin/python /opt/conda/envs/*/bin/python /opt/venv/bin/python \
+              $(ls /opt/*/bin/python3 2>/dev/null) /usr/bin/python3; do
+    if [[ -x "$cand" ]] && "$cand" -c "import torch" >/dev/null 2>&1; then PY="$cand"; break; fi
+  done
+  # Expose the resolved interpreter as both `python` and `python3` on PATH, so the
+  # job's runcmd works regardless of how that image names it.
+  mkdir -p /tmp/pybin && ln -sf "$PY" /tmp/pybin/python && ln -sf "$PY" /tmp/pybin/python3
+  export PATH="/tmp/pybin:$PATH"
+  echo "resolved torch interpreter: $PY"
+fi
 
-# --- layout matching config.py (ROOT/src, ROOT/data/processed, ROOT/amex-default-prediction) ---
+# --- python deps (skipped when PIPDEPS empty, e.g. GPU image already has them) --
+if [[ -n "${PIPDEPS// }" ]]; then
+  export DEBIAN_FRONTEND=noninteractive
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq python3-pip libgomp1 || true
+  # Newer Debian marks system Python as externally managed (PEP 668) and needs
+  # --break-system-packages; older pip (e.g. the GPU image) doesn't support the
+  # flag, so only add it when this pip understands it.
+  PIPFLAGS=""
+  "$PY" -m pip install --help 2>/dev/null | grep -q -- "--break-system-packages" \
+    && PIPFLAGS="--break-system-packages"
+  "$PY" -m pip install --quiet $PIPFLAGS $PIPDEPS
+fi
+
+# --- layout matching config.py (ROOT/src, data/processed, amex-default-prediction) --
 sudo mkdir -p "$WORK" && sudo chown -R "$(whoami)" "$WORK"
 mkdir -p "$WORK/src" "$WORK/data/processed" "$WORK/amex-default-prediction" \
          "$WORK/outputs/models"
 
-# --- pull code + data from GCS --------------------------------------------
+# --- pull code + the requested inputs from GCS ----------------------------
 gcloud storage cp "$BUCKET/src/*.py" "$WORK/src/"
-gcloud storage cp "$BUCKET/data/processed/train_features.parquet" "$WORK/data/processed/"
-gcloud storage cp "$BUCKET/data/processed/categorical_features.txt" "$WORK/data/processed/"
-gcloud storage cp "$BUCKET/data/train_labels.csv" "$WORK/amex-default-prediction/"
+for rel in $INPUTS; do
+  case "$rel" in
+    data/*.csv) dest="$WORK/amex-default-prediction/$(basename "$rel")" ;;
+    *)          dest="$WORK/$rel" ;;
+  esac
+  mkdir -p "$(dirname "$dest")"
+  gcloud storage cp "$BUCKET/$rel" "$dest"
+done
+
+# --- wait for the GPU driver (Deep-Learning image installs it at boot) ------
+if [[ "$(meta install-nvidia-driver)" == "True" ]]; then
+  echo "waiting for NVIDIA driver ..."
+  for _ in $(seq 1 90); do nvidia-smi >/dev/null 2>&1 && break; sleep 10; done
+  nvidia-smi || echo "WARN: GPU not ready after wait"
+fi
 
 # --- run the job -----------------------------------------------------------
 cd "$WORK/src"
