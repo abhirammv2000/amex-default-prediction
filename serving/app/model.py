@@ -61,17 +61,26 @@ class CreditModel:
     def _calibrate(self, p: np.ndarray) -> np.ndarray:
         return np.interp(p, self._cal_x, self._cal_y)
 
-    def score(self, statements: pd.DataFrame, n_reasons: int = 4) -> list[dict]:
-        """Score a batch of customers; returns PD, risk band and reason codes."""
+    def score(self, statements: pd.DataFrame, n_reasons: int = 4,
+              with_reasons: bool = True) -> list[dict]:
+        """Score a batch of customers; returns PD, risk band and reason codes.
+
+        ``with_reasons=False`` skips the SHAP computation — used for bulk batch
+        portfolio scoring, where reason codes are generated on demand (via the
+        API) only for the accounts a decision is actually made on, not for the
+        whole book on every run.
+        """
         feats = engineer_features(statements, self.cat_maps, self.feature_order)
         ids = feats.index.tolist()
         raw = self.booster.predict(feats)
         cal = self._calibrate(np.asarray(raw))
 
-        sv = self.explainer.shap_values(feats)
-        if isinstance(sv, list):           # some shap versions: [class0, class1]
-            sv = sv[1]
-        sv = np.asarray(sv)
+        sv = None
+        if with_reasons:
+            sv = self.explainer.shap_values(feats)
+            if isinstance(sv, list):       # some shap versions: [class0, class1]
+                sv = sv[1]
+            sv = np.asarray(sv)
 
         def _finite(x: float, default: float = 0.0) -> float:
             x = float(x)
@@ -79,12 +88,14 @@ class CreditModel:
 
         out = []
         for i, cid in enumerate(ids):
-            order = np.argsort(sv[i])[::-1]      # features pushing PD up first
-            reasons = [{"feature": self.feature_order[j],
-                        "description": _describe(self.feature_order[j]),
-                        "contribution": round(float(sv[i][j]), 4)}
-                       for j in order[:n_reasons]
-                       if np.isfinite(sv[i][j]) and sv[i][j] > 0]
+            reasons = []
+            if with_reasons:
+                order = np.argsort(sv[i])[::-1]   # features pushing PD up first
+                reasons = [{"feature": self.feature_order[j],
+                            "description": _describe(self.feature_order[j]),
+                            "contribution": round(float(sv[i][j]), 4)}
+                           for j in order[:n_reasons]
+                           if np.isfinite(sv[i][j]) and sv[i][j] > 0]
             pd_val = _finite(cal[i])
             out.append({
                 "customer_id": str(cid),
