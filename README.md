@@ -316,12 +316,25 @@ monitoring exists to surface. (`score_drift.png`, `reports/drift_psi.csv`)
 * **Monitoring:** track feature & score PSI vs the training population; re-fit /
   recalibrate if score PSI > 0.1 or material feature drift appears.
 
-## 8. Deployment — a live, explainable inference API
+## 8. Deployment — batch portfolio scoring + a live explainable API
 
-The model is deployed as a containerized **FastAPI** service on **Google Cloud
-Run** (serverless, scales to zero). It takes a customer's raw monthly statements
-and returns a **calibrated probability of default**, a **risk band**, and
-**SHAP adverse-action reason codes**. Full design in [`serving/`](serving/).
+Deployed in the **two modes a card issuer actually uses** (full design in
+[`serving/`](serving/)):
+
+* **Batch portfolio scoring (primary).** Behavioural default models are scored in
+  **batch** — the inputs (monthly statements) update once per cycle and the
+  decisions they feed (line reviews, risk-based pricing, collections, IFRS 9 /
+  CECL provisioning) are periodic portfolio runs, so real-time would be the wrong
+  architecture. [`serving/app/batch_score.py`](serving/app/batch_score.py) scores
+  the **entire 924,621-customer portfolio in ~6 min (~2,500 customers/s)**,
+  streaming customer-contiguous chunks so any size fits in memory; runs as a
+  scheduled **Cloud Run Job**.
+* **Real-time API (on-demand).** A containerized **FastAPI** service on **Cloud
+  Run** (serverless, scales to zero) for single-customer lookups, returning a
+  **calibrated PD**, **risk band**, and **SHAP adverse-action reason codes**.
+
+Both modes share the **same model and feature code** — verified identical
+to the bit — so there is no train/serve or batch/online skew.
 
 ```bash
 curl -s $URL/score -H 'content-type: application/json' -d '{"statements":[

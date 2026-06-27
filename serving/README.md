@@ -1,9 +1,24 @@
 # AMEX Default-Prediction — Inference Service
 
-A production-style inference service for the credit-default model: it turns a
-customer's **raw monthly statements** into a **calibrated probability of
-default**, a **risk band**, and **SHAP adverse-action reason codes** — served
-over a typed REST API, containerized, and deployable to Cloud Run.
+Turns a customer's **raw monthly statements** into a **calibrated probability of
+default**, a **risk band**, and **SHAP adverse-action reason codes**, in the two
+modes a real card issuer actually uses:
+
+* **Batch portfolio scoring (primary)** — [`app/batch_score.py`](app/batch_score.py).
+  Behavioural default models are scored in **batch**: the inputs (monthly
+  statements) only change once per cycle, and the decisions they feed
+  (credit-line reviews, risk-based pricing, collections, IFRS 9 / CECL
+  provisioning) are **periodic portfolio runs**, not point-of-event decisions.
+  Scores the **entire 924,621-customer test portfolio in ~6 min (~2,500
+  customers/s)** on one machine; memory-safe by streaming customer-contiguous
+  chunks, so any portfolio size fits. Runs as a scheduled **Cloud Run Job**.
+* **Real-time API (on-demand)** — [`app/main.py`](app/main.py). A **FastAPI**
+  service for single-customer lookups (a risk analyst or servicing agent pulling
+  one account's current PD + reason codes), deployed on **Cloud Run**.
+
+Both modes call the **same model and the same feature code** — verified
+identical to the bit (`tests/test_batch.py` checks batch == API on the same
+customers) — so there is no train/serve **or** batch/online skew.
 
 ## Why this design
 
@@ -83,25 +98,38 @@ uvicorn app.main:app --app-dir serving --port 8080
 docker build -f serving/Dockerfile -t amex-default-api .
 docker run -p 8080:8080 amex-default-api
 
+# 2c. batch-score a portfolio parquet (primary deployment)
+python -m app.batch_score --input portfolio.parquet --output scores.parquet \
+  --chunk-customers 25000   # run from the serving/ dir
+
 # 3. test
 pytest serving/tests -q
 ```
 
-## Deploy to Cloud Run
+## Deploy
 
 ```bash
-bash serving/deploy_cloudrun.sh    # Cloud Build → Artifact Registry → Cloud Run
+# Real-time API -> Cloud Run service (Cloud Build → Artifact Registry → Cloud Run)
+bash serving/deploy_cloudrun.sh
+
+# Batch scoring -> Cloud Run Job (same image, different entrypoint), schedulable
+# monthly via Cloud Scheduler:
+gcloud run jobs deploy amex-batch-score --image="$IMAGE" --region="$REGION" \
+  --command python --args=-m,app.batch_score,\
+--input,gs://BUCKET/portfolio.parquet,--output,gs://BUCKET/scores.parquet \
+  --memory=4Gi --cpu=2 --task-timeout=3600
+gcloud run jobs execute amex-batch-score --region="$REGION"
 ```
-Serverless, scales to zero (no idle cost). CI/CD in
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) lints, tests and builds
-on every push, and deploys to Cloud Run on `main` once `GCP_SA_KEY` /
-`GCP_PROJECT` secrets are set.
+The service is serverless and scales to zero (no idle cost). CI/CD in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) tests and builds on
+every push, and deploys to Cloud Run on `main` once `GCP_SA_KEY` / `GCP_PROJECT`
+secrets are set.
 
 ## Production notes (honest limitations)
 
-* **Batch is the natural pattern** for credit risk (monthly statements); the
-  real-time API here is the demonstrable surface, with `/score/batch` for bulk.
 * **Fairness:** the features are anonymized, so protected-attribute bias testing
   isn't possible on this dataset — it would be required before real deployment.
 * **Model registry:** the artifact is versioned by its training iteration; a real
   deployment would push to a registry (Vertex AI Model Registry) with lineage.
+* **Auth:** the demo API is public (`--allow-unauthenticated`) so it can be
+  curled; a real deployment would put it behind IAM / an API gateway.
