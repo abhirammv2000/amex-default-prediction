@@ -4,7 +4,8 @@ Predicting the probability that a credit-card customer will **default** on their
 balance, using 13 months of anonymized monthly statement data. This repository
 implements an end-to-end, memory-efficient machine-learning pipeline for the
 [Kaggle *American Express - Default Prediction*](https://www.kaggle.com/competitions/amex-default-prediction)
-competition and reports a strong, fully cross-validated **LightGBM baseline**.
+competition — taken end-to-end from 48 GB of raw data to a **calibrated,
+explainable model deployed live as an API**.
 
 > **Status:** End-to-end, **including deployment** — data → features → tuned
 > GBDTs → credit-risk evaluation (calibration, SHAP, drift) → GRU sequence model
@@ -13,18 +14,25 @@ competition and reports a strong, fully cross-validated **LightGBM baseline**.
 
 ### Highlights
 
-* **Engineered a memory-safe pipeline** that processes **48 GB of raw CSVs on a
-  16 GB-RAM machine** via chunked streaming, `float32` Parquet conversion, and
-  column-batched aggregation — nothing is ever fully loaded into memory.
-* **Faithful, unit-tested implementation** of the competition's custom
-  rank metric (normalized Gini + default-capture@4 %, with ×20 negative
-  weighting).
-* **Cross-validated LightGBM baseline scoring 0.79123** (5-fold OOF Amex
-  metric) — competitive with strong public baselines (winners ≈ 0.808).
-* Clean, reproducible, scripted pipeline: profile → convert → features →
-  train → predict, plus an EDA notebook.
+* **Memory-safe pipeline** processing **48 GB of raw CSVs on a 16 GB-RAM
+  machine** via chunked streaming, `float32` Parquet, and column-batched
+  aggregation — nothing is ever fully loaded into memory.
+* **Iterative, honestly-reported modelling** (every score is 5-fold OOF):
+  baseline LightGBM **0.79123** → trend features **0.79266** → +XGBoost blend
+  **0.79294** → +GRU sequence model **0.79545** (winners ≈ 0.808). Includes a
+  documented *negative* result (tuning didn't help).
+* **Treated as a real credit-risk model, not a Kaggle score:** probability
+  calibration, KS/decile/approval economics, **SHAP adverse-action reason
+  codes**, and **PSI drift monitoring** (which caught a real train/test bug).
+* **Reproducible cloud workflow** for GPU/GBDT training, and a **GRU** (PyTorch)
+  trained on a GCP L4 GPU for model diversity.
+* **Deployed:** a **FastAPI** service — *same* feature code as training (no
+  serving skew, test-proven) — calibrated PD + reason codes, containerized,
+  tested (pytest), CI/CD (GitHub Actions), **live on Cloud Run**.
 
-**Tech:** Python · pandas · PyArrow · LightGBM · scikit-learn · matplotlib
+**Tech:** Python · pandas · PyArrow · LightGBM · XGBoost · PyTorch · scikit-learn
+· SHAP · FastAPI · Docker · GitHub Actions · Google Cloud (Compute Engine, Cloud
+Run, Cloud Build, GCS)
 
 ---
 
@@ -105,15 +113,17 @@ is built around three memory-safe ideas:
 2. **Collapse the time series → one row per customer.**
    [`feature_engineering.py`](src/feature_engineering.py) aggregates each
    customer's statements into summary statistics:
-   * numeric (177): `mean, std, min, max, last`
-   * categorical (11): `last, nunique, count`
+   * numeric (177): `mean, std, min, max, first, last` **plus** trend/deviation
+     features `last−mean`, `last−first`, `range` (added in iteration v2 — §6)
+   * categorical (11): `last, nunique, count` (the `last` code is mapped with a
+     train-fit encoder, applied consistently to test)
    * plus `statement_count` and `history_days`.
    Columns are read from Parquet in **small batches** (40 at a time) so the full
    5.5 M-row table is never in memory at once; `customer_ID` is factorized to
    integer codes **once** and reused for every batch.
 
-3. **Train on the compact feature matrix.** ~458 K customers × ~920 features
-   (`float32`, ≈ 1.6 GB) fits comfortably in memory for 5-fold LightGBM.
+3. **Train on the compact feature matrix.** ~458 K customers × **1,628 features**
+   (`float32`, ≈ 3 GB) — the baseline used ~920; the trend features (v2) expand it.
 
 ```
 raw CSV (48 GB)
