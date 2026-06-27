@@ -9,8 +9,14 @@ explainable model deployed live as an API**.
 
 > **Status:** End-to-end, **including deployment** — data → features → tuned
 > GBDTs → credit-risk evaluation (calibration, SHAP, drift) → GRU sequence model
-> → 3-way blend (OOF Amex 0.795) → a **calibrated, explainable inference API
-> deployed live on Google Cloud Run**. See [`serving/`](serving/).
+> → 3-way blend (OOF Amex 0.795) → batch portfolio scoring + a **calibrated,
+> explainable model deployed live on Google Cloud Run**. See [`serving/`](serving/).
+
+### 🔗 Live
+
+* **Interactive demo (risk-analyst dashboard):** https://amex-risk-demo-634289062173.us-central1.run.app
+  — pick a customer, see their PD, risk band and **SHAP reason codes**, and run what-if scenarios.
+* **Inference API (OpenAPI docs):** https://amex-default-api-634289062173.us-central1.run.app/docs
 
 ### Highlights
 
