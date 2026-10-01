@@ -40,11 +40,10 @@ def get_samples():
     return df, meta
 
 
-st.set_page_config(page_title="AMEX Credit-Risk Analyst", page_icon="💳",
-                   layout="wide")
+st.set_page_config(page_title="AMEX Credit-Risk Analyst", layout="wide")
 model, (samples, meta) = get_model(), get_samples()
 
-st.title("💳 Credit-Risk Analyst Dashboard")
+st.title("Credit-Risk Analyst Dashboard")
 st.caption(
     "Look up a customer's **probability of default (PD)** and the reasons behind "
     "it. Model: calibrated LightGBM (AUC 0.96, KS 0.79) scoring 13 months of "

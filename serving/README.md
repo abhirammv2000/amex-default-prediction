@@ -42,7 +42,7 @@ so there is no train/serve or batch/online skew.
                     ▼
         1,628-feature vector
                     │
-   app/model.py     │  LightGBM → isotonic calibration → SHAP
+   app/model.py     │  LightGBM -> isotonic calibration -> SHAP
                     ▼
    { probability_of_default, risk_band, top_reason_codes }
                     │
@@ -126,7 +126,7 @@ pytest serving/tests -q
 ## Deploy
 
 ```bash
-# Real-time API -> Cloud Run service (Cloud Build → Artifact Registry → Cloud Run)
+# Real-time API -> Cloud Run service (Cloud Build -> Artifact Registry -> Cloud Run)
 bash serving/deploy_cloudrun.sh
 
 # Batch scoring -> Cloud Run Job (same image, different entrypoint), schedulable
