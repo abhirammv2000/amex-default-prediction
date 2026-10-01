@@ -1,20 +1,10 @@
-"""Per-customer feature engineering from the Parquet statement tables.
+"""Turn the statement tables into one row of features per customer.
 
-Each customer has up to 13 monthly statements (a short multivariate time series).
-A GBDT needs one row per customer, so we collapse the series into summary
-statistics:
-
-  * numeric features (177)  -> mean, std, min, max, last
-  * categorical features (11) -> last, nunique, count
-  * plus the statement count and the time span of the customer's history
-
-To stay within 16 GB of RAM the columns are read from Parquet in small batches
-(``--col-batch`` columns at a time) rather than loading the whole 5.5M-row table
-at once. ``customer_ID`` is factorised to integer codes a single time and reused
-for every batch, so the expensive string column is only read once.
-
-Output: ``train_features.parquet`` / ``test_features.parquet`` — one row per
-customer, ready for modelling.
+A customer has up to 13 monthly statements and the GBDT needs one row, so each series is summarised: mean, std,
+min, max and last for the 177 numeric columns, last, nunique and count for the 11 categorical ones, plus the
+number of statements and the span of the history. To fit in 16 GB the columns are read from Parquet in small
+batches (--col-batch at a time) instead of loading all 5.5M rows, and customer_ID is turned into integer codes
+once and reused. Writes train_features.parquet and test_features.parquet.
 """
 from __future__ import annotations
 
@@ -34,16 +24,9 @@ CAT_AGGS = ["last", "nunique", "count"]
 
 
 def _add_numeric_diffs(agg: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    """Derive trend/deviation features from the per-customer aggregates.
-
-    These are computed from columns already present (no extra data pass) and
-    capture *how a customer's account is changing*, which is more predictive
-    than its level alone:
-
-      * last_mean_diff : latest value vs. the customer's own typical value
-      * last_first_diff: net movement across the whole statement history
-      * range          : volatility (max - min)
-    """
+    """Trend features from the aggregates we already have, since how an account is changing says more than its level:
+    last_mean_diff (latest vs the customer's usual), last_first_diff (net movement over the history) and range
+    (max minus min)."""
     new = {}
     for c in cols:
         last, mean = agg[f"{c}_last"], agg[f"{c}_mean"]
@@ -74,7 +57,7 @@ def build_features(parquet_path, out_path, col_batch: int, is_train: bool) -> No
     print(f"{len(num_cols)} numeric | {len(cat_cols)} categorical")
 
     t0 = time.time()
-    # --- factorise customer_ID once (data is grouped by customer already) ----
+    # customer_ID to integer codes, once (the rows are already grouped by customer)
     cid = pq.read_table(parquet_path, columns=[config.ID_COL]).column(0).to_pandas()
     codes, uniques = pd.factorize(cid)
     codes = codes.astype(np.int32)
@@ -86,7 +69,7 @@ def build_features(parquet_path, out_path, col_batch: int, is_train: bool) -> No
 
     parts: list[pd.DataFrame] = []
 
-    # --- numeric aggregations in column batches ------------------------------
+    # numeric columns, a batch at a time
     for b, cols in enumerate(_batched(num_cols, col_batch), 1):
         tbl = pq.read_table(parquet_path, columns=cols).to_pandas()
         tbl["_cid"] = codes
@@ -98,14 +81,13 @@ def build_features(parquet_path, out_path, col_batch: int, is_train: bool) -> No
         del tbl, agg
         gc.collect()
 
-    # --- categorical aggregations -------------------------------------------
+    # categorical columns
     tbl = pq.read_table(parquet_path, columns=cat_cols).to_pandas()
     tbl["_cid"] = codes
     cat_agg = _flatten(tbl.groupby("_cid")[cat_cols].agg(CAT_AGGS))
-    # 'last' of categoricals may be string/float codes -> label-encode to int16.
-    # The mapping is FIT ON TRAIN and persisted, then applied to test, so a code
-    # means the same category in both splits (encoding it independently per split
-    # silently misaligns codes — caught by PSI drift monitoring, see drift.py).
+    # the last value of a categorical can be a string or a float code, so label-encode it to int16. The
+    # mapping is fit on train and saved, then reused on test. Encoding each split separately gave different
+    # codes for the same category, which the PSI check in drift.py caught
     map_path = config.PROCESSED_DIR / "categorical_maps.json"
     if is_train:
         maps = {}
@@ -131,7 +113,7 @@ def build_features(parquet_path, out_path, col_batch: int, is_train: bool) -> No
     del tbl, cat_agg
     gc.collect()
 
-    # --- date-derived: statement count + history span in days ----------------
+    # statement count and days of history
     s2 = pq.read_table(parquet_path, columns=[config.DATE_COL]).column(0).to_pandas()
     date_df = pd.DataFrame({"_cid": codes, config.DATE_COL: s2})
     span = date_df.groupby("_cid")[config.DATE_COL].agg(["count", "min", "max"])
@@ -143,11 +125,9 @@ def build_features(parquet_path, out_path, col_batch: int, is_train: bool) -> No
     del s2, date_df
     gc.collect()
 
-    # --- assemble ------------------------------------------------------------
-    # Build the wide table column-by-column in Arrow instead of pd.concat. On the
-    # 924K-customer test set the pandas block consolidation transiently doubles
-    # memory (~12 GB) and OOMs on 16 GB; converting each part to Arrow and freeing
-    # the pandas frame as we go keeps the peak near the data size (~6 GB).
+    # build the wide table column by column in Arrow, not pd.concat. On the 924K customer test set pandas
+    # doubles its memory while consolidating (about 12 GB) and runs out on 16 GB. Converting each part to Arrow and
+    # freeing the frame keeps the peak near 6 GB
     import pyarrow as pa
 
     n_feats = sum(p.shape[1] for p in parts)
@@ -169,7 +149,7 @@ def build_features(parquet_path, out_path, col_batch: int, is_train: bool) -> No
     pq.write_table(pa.table(arrays), out_path)
     del arrays
     gc.collect()
-    # Persist the categorical column list alongside (same names both splits).
+    # save the categorical column list too
     (config.PROCESSED_DIR / "categorical_features.txt").write_text(
         "\n".join(cat_feature_names)
     )
@@ -183,8 +163,7 @@ if __name__ == "__main__":
     ap.add_argument("--col-batch", type=int, default=40)
     args = ap.parse_args()
 
-    # Train must be built first: it fits and persists the categorical maps that
-    # test then reuses (so codes mean the same category in both splits).
+    # train goes first, it fits the categorical maps that test reuses
     if args.which in ("train", "both"):
         build_features(config.TRAIN_PARQUET, config.TRAIN_FEATURES, args.col_batch,
                        is_train=True)

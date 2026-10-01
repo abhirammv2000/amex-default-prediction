@@ -1,11 +1,6 @@
-"""Generate the Kaggle submission from the trained fold models.
+"""Make the Kaggle submission: average the five fold models' predictions on the test features and write
+customer_ID,prediction.
 
-Loads the engineered test feature table, averages the predictions of the five
-fold models, and writes a submission CSV in the required
-``customer_ID,prediction`` format.
-
-Usage
------
     python predict.py
 """
 from __future__ import annotations
@@ -24,17 +19,17 @@ def main() -> None:
     test = pd.read_parquet(config.TEST_FEATURES)
     ids = test[config.ID_COL]
     feature_cols = [c for c in test.columns if c != config.ID_COL]
-    X = test[feature_cols]
-    print(f"Test matrix: {X.shape[0]:,} customers x {len(feature_cols)} features")
+    features = test[feature_cols]
+    print(f"Test matrix: {features.shape[0]:,} customers x {len(feature_cols)} features")
 
     model_paths = sorted(config.MODEL_DIR.glob("lgbm_fold*.txt"))
     if not model_paths:
-        raise FileNotFoundError("No fold models found — run train_baseline.py first.")
+        raise FileNotFoundError("No fold models found, run train_baseline.py first.")
 
-    preds = np.zeros(len(X))
+    preds = np.zeros(len(features))
     for p in model_paths:
         model = lgb.Booster(model_file=str(p))
-        preds += model.predict(X) / len(model_paths)
+        preds += model.predict(features) / len(model_paths)
         print(f"  scored with {p.name} ({time.time() - t0:.0f}s)")
 
     sub = pd.DataFrame({config.ID_COL: ids, "prediction": preds})

@@ -1,15 +1,7 @@
-"""Train the final production model served by the API.
-
-Cross-validation (in src/) was for model *selection*; production uses a single
-model trained on all data. We:
-  1. hold out 10% to get an early-stopping iteration and fit an isotonic
-     calibrator (so the API returns true probabilities of default),
-  2. retrain on 100% of the data at that iteration,
-  3. save the booster + calibrator + metadata to serving/artifacts/.
-
-The served model is the calibrated LightGBM — single, fast, and explainable
-(the API attaches SHAP reason codes) — the honest production choice over the
-research blend.
+"""Train the model the API serves. The CV in src/ was for choosing a model, and production is one model trained on all the data.
+First hold out 10% to find the early stopping iteration and fit an isotonic calibrator (so the API returns real probabilities
+of default), then retrain on everything at that iteration and save the booster, calibrator and metadata to serving/artifacts/.
+The served model is the calibrated LightGBM, not the blend: it's a single fast model and SHAP can explain it.
 """
 from __future__ import annotations
 
@@ -46,29 +38,29 @@ def main() -> None:
     cat_features = [c for c in (config.PROCESSED_DIR / "categorical_features.txt")
                     .read_text().split() if c in df.columns]
     feat_cols = [c for c in df.columns if c not in (config.ID_COL, config.TARGET_COL)]
-    X, y = df[feat_cols], df[config.TARGET_COL].values
+    features, y = df[feat_cols], df[config.TARGET_COL].values
     print(f"final model on {len(df):,} x {len(feat_cols)} feats")
 
-    # --- 1. holdout for early stopping + calibration -------------------------
-    Xtr, Xca, ytr, yca = train_test_split(X, y, test_size=0.1, stratify=y,
+    # 1. holdout for early stopping + calibration
+    x_train, x_cal, ytr, yca = train_test_split(features, y, test_size=0.1, stratify=y,
                                           random_state=config.SEED)
     model = lgb.train(
-        PARAMS, lgb.Dataset(Xtr, ytr, categorical_feature=cat_features),
+        PARAMS, lgb.Dataset(x_train, ytr, categorical_feature=cat_features),
         num_boost_round=2000,
-        valid_sets=[lgb.Dataset(Xca, yca, categorical_feature=cat_features)],
+        valid_sets=[lgb.Dataset(x_cal, yca, categorical_feature=cat_features)],
         feval=lgb_amex_metric,
         callbacks=[lgb.early_stopping(100, verbose=False)])
     best_iter = model.best_iteration
-    p_ca = model.predict(Xca)
+    p_ca = model.predict(x_cal)
     holdout_amex = amex_metric_np(yca, p_ca)
     print(f"holdout amex={holdout_amex:.5f} best_iter={best_iter} "
           f"({time.time()-t0:.0f}s)")
 
-    # --- 2. isotonic calibrator on the holdout -------------------------------
+    # 2. isotonic calibrator on the holdout
     iso = IsotonicRegression(out_of_bounds="clip").fit(p_ca, yca)
 
-    # --- 3. retrain on ALL data at best_iter ---------------------------------
-    final = lgb.train(PARAMS, lgb.Dataset(X, y, categorical_feature=cat_features),
+    # 3. retrain on ALL data at best_iter
+    final = lgb.train(PARAMS, lgb.Dataset(features, y, categorical_feature=cat_features),
                       num_boost_round=best_iter)
     final.save_model(str(ART / "model.txt"))
     (ART / "calibrator.json").write_text(json.dumps({

@@ -1,16 +1,10 @@
-"""Build per-customer sequence tensors for the GRU (no aggregation).
+"""Build the per-customer sequence tensors for the GRU, with no aggregation.
 
-The GBDT path collapses each customer's statements into summary stats; the
-sequence model instead keeps the raw monthly series. Each customer becomes a
-left-aligned, zero-padded ``[13, F]`` tensor (oldest statement first) plus its
-true length, so a packed GRU can ignore the padding.
+The GBDT summarises each customer, the sequence model keeps the raw monthly series. A customer becomes a zero-padded
+[13, F] tensor (oldest statement first) plus its real length, so a packed GRU can skip the padding. Numeric features are
+standardised with statistics fit on train (saved and reused for test), and the two string categoricals (D_63, D_64) use a
+map fit on train. Writes an .npz with the sequences (float16), lengths, labels (train only) and customer_ids.
 
-Numeric features are standardised with statistics **fit on train** (saved and
-reused for test); the two string categoricals (D_63, D_64) are integer-encoded
-with a train-fit map. Output: an ``.npz`` with sequences (float16), lengths,
-labels (train only) and customer_ids.
-
-Usage:
     python build_sequences.py --which train
     python build_sequences.py --which test
 """
@@ -43,7 +37,7 @@ def build(which: str) -> None:
     feat_cols = _feature_cols(pq_path)
     print(f"[{which}] {len(feat_cols)} features from {pq_path.name}")
 
-    # --- customer codes (1 column; statements already in customer/date order) -
+    # customer codes (one column, the statements are already in customer and date order)
     cid = pq.read_table(pq_path, columns=[config.ID_COL]).column(0).to_pandas()
     codes, uniques = pd.factorize(cid)                    # contiguous blocks
     codes = codes.astype(np.int64)
@@ -52,7 +46,7 @@ def build(which: str) -> None:
           f"({time.time()-t0:.0f}s)")
     del cid
 
-    # --- categorical maps: fit on train (read only the 2 string cols), else load
+    # categorical maps: fit on train (only the 2 string columns), otherwise load them
     if is_train:
         cat_maps = {}
         for c in STR_CATS:
@@ -74,10 +68,10 @@ def build(which: str) -> None:
                       .astype(np.float32))
         return bdf
 
-    F = len(feat_cols)
-    # --- standardisation stats: compute streaming on train, else load ---------
+    n_feats = len(feat_cols)
+    # standardisation stats: compute streaming on train, else load
     if is_train:
-        cnt = np.zeros(F); s1 = np.zeros(F); s2 = np.zeros(F)
+        cnt = np.zeros(n_feats); s1 = np.zeros(n_feats); s2 = np.zeros(n_feats)
         for batch in pq.ParquetFile(pq_path).iter_batches(batch_size=1_000_000,
                                                           columns=feat_cols):
             arr = _encode_batch(batch.to_pandas())[feat_cols].to_numpy(np.float32)
@@ -92,8 +86,8 @@ def build(which: str) -> None:
         st = json.loads(STATS_PATH.read_text())
         mean, std = np.array(st["mean"]), np.array(st["std"])
 
-    # --- fill the standardised float16 feature matrix in row batches ----------
-    feats = np.empty((n_rows, F), dtype=np.float16)
+    # fill the standardised float16 feature matrix in row batches
+    feats = np.empty((n_rows, n_feats), dtype=np.float16)
     off = 0
     for batch in pq.ParquetFile(pq_path).iter_batches(batch_size=1_000_000,
                                                       columns=feat_cols):
@@ -104,14 +98,14 @@ def build(which: str) -> None:
         feats[off:off + len(arr)] = arr.astype(np.float16)
         off += len(arr)
 
-    # --- vectorised scatter into [N, 13, F] (keep the last 13 statements) -----
+    # vectorised scatter into [N, 13, F] (keep the last 13 statements)
     counts = np.bincount(codes, minlength=n_cust)
     starts = np.repeat(np.cumsum(counts) - counts, counts)
     within = np.arange(len(codes)) - starts            # 0-based pos within customer
     drop = np.repeat(np.maximum(counts - MAXLEN, 0), counts)
     pos = within - drop                                # left-aligned kept position
     valid = pos >= 0
-    seq = np.zeros((n_cust, MAXLEN, F), dtype=np.float16)
+    seq = np.zeros((n_cust, MAXLEN, n_feats), dtype=np.float16)
     seq[codes[valid], pos[valid], :] = feats[valid]
     lengths = np.minimum(counts, MAXLEN).astype(np.int16)
     print(f"[{which}] tensor {seq.shape} ({seq.nbytes/1e9:.1f} GB) "

@@ -1,33 +1,33 @@
-# AMEX Default-Prediction — Inference Service
+# AMEX Default-Prediction Inference Service
 
-Turns a customer's **raw monthly statements** into a **calibrated probability of
-default**, a **risk band**, and **SHAP adverse-action reason codes**, in the two
-modes a real card issuer actually uses:
+Turns a customer's raw monthly statements into a calibrated probability of
+default, a risk band, and SHAP adverse-action reason codes, in the two modes
+a real card issuer actually uses:
 
-* **Batch portfolio scoring (primary)** — [`app/batch_score.py`](app/batch_score.py).
-  Behavioural default models are scored in **batch**: the inputs (monthly
+* **Batch portfolio scoring (primary)**, [`app/batch_score.py`](app/batch_score.py).
+  Behavioural default models are scored in batch: the inputs (monthly
   statements) only change once per cycle, and the decisions they feed
   (credit-line reviews, risk-based pricing, collections, IFRS 9 / CECL
-  provisioning) are **periodic portfolio runs**, not point-of-event decisions.
-  Scores the **entire 924,621-customer test portfolio in ~6 min (~2,500
-  customers/s)** on one machine; memory-safe by streaming customer-contiguous
-  chunks, so any portfolio size fits. Runs as a scheduled **Cloud Run Job**.
-* **Real-time API (on-demand)** — [`app/main.py`](app/main.py). A **FastAPI**
-  service for single-customer lookups (a risk analyst or servicing agent pulling
-  one account's current PD + reason codes), deployed on **Cloud Run**.
+  provisioning) are periodic portfolio runs, not point-of-event decisions.
+  Scores the entire 924,621-customer test portfolio in ~6 min (~2,500
+  customers/s) on one machine; memory-safe by streaming customer-contiguous
+  chunks, so any portfolio size fits. Runs as a scheduled Cloud Run Job.
+* **Real-time API (on-demand)**, [`app/main.py`](app/main.py). A FastAPI
+  service for single-customer lookups (a risk analyst or servicing agent
+  pulling one account's current PD + reason codes), deployed on Cloud Run.
 
-Both modes call the **same model and the same feature code** — verified
-identical to the bit (`tests/test_batch.py` checks batch == API on the same
-customers) — so there is no train/serve **or** batch/online skew.
+Both modes call the same model and the same feature code, verified identical
+to the bit (`tests/test_batch.py` checks batch == API on the same customers),
+so there is no train/serve or batch/online skew.
 
 ## Why this design
 
 | Decision | Reasoning |
 |----------|-----------|
 | **Serve the calibrated LightGBM**, not the 3-way blend | Single model: fast, well-calibrated PDs, and *explainable*. Regulated lending needs reason codes; a research blend doesn't pass model-risk review. The blend stays an offline benchmark. |
-| **One feature-engineering codebase** for train **and** serve (`app/pipeline.py`) | Eliminates **training/serving skew** — the silent failure where the online model sees subtly different features. Proven by `tests/test_pipeline.py`, which asserts the API's features match the offline training table row-for-row. |
+| **One feature-engineering codebase** for train **and** serve (`app/pipeline.py`) | Eliminates **training/serving skew**, the silent failure where the online model sees subtly different features. Proven by `tests/test_pipeline.py`, which asserts the API's features match the offline training table row-for-row. |
 | **Final model trained on all data** (`train_serving_model.py`) | CV was for model *selection*; production uses one model on 100% of the data, with an isotonic calibrator fit on a holdout. |
-| **Reason codes in the response** | SHAP per-prediction attributions → adverse-action explanations (ECOA). |
+| **Reason codes in the response** | SHAP per-prediction attributions produce adverse-action explanations (ECOA). |
 | **Prometheus `/metrics` + structured logs** | Real observability; prediction logs feed the offline PSI drift job (`src/drift.py`). |
 
 ## Architecture
@@ -142,10 +142,11 @@ The service is serverless and scales to zero (no idle cost). CI/CD in
 every push, and deploys to Cloud Run on `main` once `GCP_SA_KEY` / `GCP_PROJECT`
 secrets are set.
 
-## Production notes (honest limitations)
+## Production notes (known limitations)
 
-* **Fairness:** the features are anonymized, so protected-attribute bias testing
-  isn't possible on this dataset — it would be required before real deployment.
+* **Fairness:** the features are anonymized, so protected-attribute bias
+  testing isn't possible on this dataset; it would be required before real
+  deployment.
 * **Model registry:** the artifact is versioned by its training iteration; a real
   deployment would push to a registry (Vertex AI Model Registry) with lineage.
 * **Auth:** the demo API is public (`--allow-unauthenticated`) so it can be

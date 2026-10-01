@@ -1,17 +1,10 @@
-"""Hyperparameter tuning for the LightGBM model with Optuna.
+"""Tune the LightGBM model with Optuna, in two steps.
 
-Two stages:
-  1. SEARCH  - a fast single-fold objective (train on 4 folds, validate on 1)
-     so each trial is ~2-3 min; Optuna maximises the official Amex metric over
-     a sensible LightGBM search space.
-  2. RETRAIN - an honest 5-fold StratifiedKFold run with the best params,
-     producing the OOF score, per-fold models and cv_metadata (same artifacts
-     as train_baseline.py) so the result is directly comparable.
+First a search with a quick single-fold objective (train on 4 folds, validate on 1, about 2 to 3 minutes a trial) that
+maximises the Amex metric. Then a proper 5-fold retrain with the best params, which writes the same artifacts as
+train_baseline.py so the results compare directly. Output goes under outputs/ (best_params.json, the fold models,
+cv_metadata.json, feature_importance.csv), and the OOF predictions to data/processed/.
 
-Outputs (under outputs/): best_params.json, models/lgbm_fold*.txt,
-models/cv_metadata.json, feature_importance.csv; OOF to data/processed/.
-
-Usage:
     python tune.py --n-trials 50 --timeout 3600
 """
 from __future__ import annotations
@@ -31,22 +24,22 @@ from metric import amex_metric_np, lgb_amex_metric
 from train_baseline import load_training_data  # reuse the exact loader
 
 
-def run_cv(X, y, cat_features, params, num_boost_round, early_stopping):
+def run_cv(features, y, cat_features, params, num_boost_round, early_stopping):
     """Honest 5-fold CV; returns (oof, fold_scores, importances, best_iters)."""
     skf = StratifiedKFold(n_splits=config.N_FOLDS, shuffle=True,
                           random_state=config.SEED)
     oof = np.zeros(len(y))
-    importances = np.zeros(X.shape[1])
+    importances = np.zeros(features.shape[1])
     fold_scores, best_iters = [], []
-    for fold, (tr, va) in enumerate(skf.split(X, y), 1):
-        dtr = lgb.Dataset(X.iloc[tr], y[tr], categorical_feature=cat_features)
-        dva = lgb.Dataset(X.iloc[va], y[va], categorical_feature=cat_features)
+    for fold, (tr, va) in enumerate(skf.split(features, y), 1):
+        dtr = lgb.Dataset(features.iloc[tr], y[tr], categorical_feature=cat_features)
+        dva = lgb.Dataset(features.iloc[va], y[va], categorical_feature=cat_features)
         model = lgb.train(
             params, dtr, num_boost_round=num_boost_round, valid_sets=[dva],
             feval=lgb_amex_metric,
             callbacks=[lgb.early_stopping(early_stopping, verbose=False)],
         )
-        oof[va] = model.predict(X.iloc[va])
+        oof[va] = model.predict(features.iloc[va])
         fold_scores.append(amex_metric_np(y[va], oof[va]))
         importances += model.feature_importance("gain") / config.N_FOLDS
         best_iters.append(model.best_iteration)
@@ -59,22 +52,21 @@ def run_cv(X, y, cat_features, params, num_boost_round, early_stopping):
 def main(args) -> None:
     t0 = time.time()
     df, feature_cols, cat_features = load_training_data()
-    X = df[feature_cols]
+    features = df[feature_cols]
     y = df[config.TARGET_COL].values
-    print(f"Tuning on {X.shape[0]:,} x {len(feature_cols)} | "
+    print(f"Tuning on {features.shape[0]:,} x {len(feature_cols)} | "
           f"{len(cat_features)} categorical")
 
-    # ---- single fixed split for the fast search objective -------------------
+    # single fixed split for the fast search objective
     skf = StratifiedKFold(n_splits=config.N_FOLDS, shuffle=True,
                           random_state=config.SEED)
-    tr_idx, va_idx = next(iter(skf.split(X, y)))
-    # The search Dataset is built once and reused across trials, so disable
-    # feature pre-filtering — otherwise LightGBM errors when a later trial lowers
-    # min_child_samples below the value used to bin/pre-filter the features.
+    tr_idx, va_idx = next(iter(skf.split(features, y)))
+    # the search Dataset is reused across trials, so turn off feature pre-filtering. Otherwise LightGBM errors when a later
+    # trial lowers min_child_samples below what was used to bin the features
     ds_params = {"feature_pre_filter": False}
-    dtrain = lgb.Dataset(X.iloc[tr_idx], y[tr_idx], categorical_feature=cat_features,
+    dtrain = lgb.Dataset(features.iloc[tr_idx], y[tr_idx], categorical_feature=cat_features,
                          params=ds_params)
-    dvalid = lgb.Dataset(X.iloc[va_idx], y[va_idx], categorical_feature=cat_features,
+    dvalid = lgb.Dataset(features.iloc[va_idx], y[va_idx], categorical_feature=cat_features,
                          params=ds_params)
     y_va = y[va_idx]
 
@@ -98,7 +90,7 @@ def main(args) -> None:
             feval=lgb_amex_metric,
             callbacks=[lgb.early_stopping(100, verbose=False)],
         )
-        score = amex_metric_np(y_va, model.predict(X.iloc[va_idx]))
+        score = amex_metric_np(y_va, model.predict(features.iloc[va_idx]))
         trial.set_user_attr("best_iteration", model.best_iteration)
         return score
 
@@ -112,7 +104,7 @@ def main(args) -> None:
           f"{study.best_value:.5f} | {time.time() - t0:.0f}s")
     print("Best params:", json.dumps(study.best_params, indent=2))
 
-    # ---- honest 5-fold retrain with the best params -------------------------
+    # honest 5-fold retrain with the best params
     best = {
         "objective": "binary", "verbosity": -1, "n_jobs": -1,
         "seed": config.SEED, "boosting_type": "gbdt", "bagging_freq": 1,
@@ -122,7 +114,7 @@ def main(args) -> None:
 
     print("\nRetraining 5-fold with best params ...")
     oof, fold_scores, importances, best_iters = run_cv(
-        X, y, cat_features, best, num_boost_round=args.final_rounds,
+        features, y, cat_features, best, num_boost_round=args.final_rounds,
         early_stopping=args.early_stopping)
     cv = amex_metric_np(y, oof)
     print("\n================ TUNED CV ================")

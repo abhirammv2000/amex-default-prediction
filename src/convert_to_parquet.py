@@ -1,14 +1,9 @@
-"""Convert the raw Kaggle CSVs to compact Parquet files.
+"""Convert the raw Kaggle CSVs to Parquet.
 
-The raw ``train_data.csv`` (15.6 GB) and ``test_data.csv`` (32.3 GB) cannot be
-loaded into 16 GB of RAM. This script streams them in row chunks, downcasts the
-185 numeric columns from float64 to float32 (halving memory and disk), keeps the
-two string categoricals (D_63, D_64) and the customer_ID as strings, parses S_2
-as a timestamp, and appends each chunk to a Parquet file via a single
-``ParquetWriter`` so peak memory stays at ~one chunk.
+train_data.csv (15.6 GB) and test_data.csv (32.3 GB) don't fit in 16 GB of RAM, so this streams them in chunks. The 185
+numeric columns go from float64 to float32, the two string categoricals (D_63, D_64) and customer_ID stay strings, S_2 is
+parsed as a timestamp, and each chunk is appended through one ParquetWriter so memory stays at about one chunk.
 
-Usage
------
     python convert_to_parquet.py --which train
     python convert_to_parquet.py --which test
     python convert_to_parquet.py --which both
@@ -24,7 +19,7 @@ import pyarrow.parquet as pq
 
 import config
 
-# Columns that are NOT float: kept as strings / timestamp.
+# the columns that aren't float: strings and the timestamp
 STRING_COLS = {config.ID_COL, "D_63", "D_64"}
 DATE_COLS = {config.DATE_COL}
 
@@ -44,7 +39,7 @@ def _build_schema(columns: list[str]) -> pa.Schema:
 def convert(csv_path, parquet_path, chunk_size: int) -> None:
     columns = pd.read_csv(csv_path, nrows=0).columns.tolist()
     float_cols = [c for c in columns if c not in STRING_COLS and c not in DATE_COLS]
-    # Force float32 on read so we never materialise a float64 copy.
+    # read as float32 straight away, no float64 copy
     read_dtypes = {c: "float32" for c in float_cols}
     schema = _build_schema(columns)
 
@@ -62,7 +57,7 @@ def convert(csv_path, parquet_path, chunk_size: int) -> None:
             parse_dates=[config.DATE_COL],
         )
         for i, chunk in enumerate(reader, 1):
-            # Reorder to the schema's column order and cast via the fixed schema.
+            # put the columns in schema order and cast to it
             table = pa.Table.from_pandas(
                 chunk[columns], schema=schema, preserve_index=False
             )

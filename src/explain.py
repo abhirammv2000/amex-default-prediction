@@ -1,15 +1,10 @@
-"""Model explainability with SHAP — global drivers + per-customer reason codes.
+"""SHAP explanations: which features drive the model overall, and reason codes for single customers.
 
-Regulated lending (e.g. ECOA) requires an *adverse-action* explanation: the
-specific reasons a customer was scored as high risk. Tree SHAP gives exact,
-additive per-prediction attributions that support both a global view (which
-features drive the model) and local "reason codes" for individual decisions.
+Lending rules like ECOA need the specific reasons a customer was scored high risk. Tree SHAP gives per-prediction
+attributions that work for the overall view and for individual reason codes. It runs on a sample, since all 458K
+customers by 1,628 features isn't needed. Writes shap_summary.png and shap_importance.png to reports/figures/ and
+prints some example reason codes.
 
-Runs on a sample of customers (Tree SHAP on all 458K x 1,628 is unnecessary).
-Outputs: reports/figures/shap_summary.png, shap_importance.png and printed
-example reason codes.
-
-Usage:
     python explain.py --sample 20000
 """
 from __future__ import annotations
@@ -33,16 +28,16 @@ def main(args) -> None:
 
     rng = np.random.default_rng(config.SEED)
     idx = rng.choice(len(df), size=min(args.sample, len(df)), replace=False)
-    X = df.iloc[idx][feature_cols]
+    features = df.iloc[idx][feature_cols]
     y = df.iloc[idx][config.TARGET_COL].values
 
-    print(f"Computing Tree SHAP on {len(X):,} customers x {len(feature_cols)} feats ...")
+    print(f"Computing Tree SHAP on {len(features):,} customers x {len(feature_cols)} feats ...")
     explainer = shap.TreeExplainer(model)
-    sv = explainer.shap_values(X)
+    sv = explainer.shap_values(features)
     if isinstance(sv, list):          # older shap returns [class0, class1]
         sv = sv[1]
 
-    # ---- global: mean |SHAP| importance ------------------------------------
+    # global: mean |SHAP| importance
     mean_abs = np.abs(sv).mean(0)
     order = np.argsort(mean_abs)[::-1]
     print("\nTop 15 global drivers (mean |SHAP|):")
@@ -50,18 +45,18 @@ def main(args) -> None:
         print(f"  {feature_cols[i]:24s} {mean_abs[i]:.4f}")
 
     plt.figure()
-    shap.summary_plot(sv, X, max_display=20, show=False)
-    plt.title("SHAP summary — top 20 features")
+    shap.summary_plot(sv, features, max_display=20, show=False)
+    plt.title("SHAP summary: top 20 features")
     plt.savefig(config.FIGURE_DIR / "shap_summary.png", bbox_inches="tight", dpi=110)
     plt.close()
 
     plt.figure()
-    shap.summary_plot(sv, X, plot_type="bar", max_display=20, show=False)
+    shap.summary_plot(sv, features, plot_type="bar", max_display=20, show=False)
     plt.title("SHAP global importance")
     plt.savefig(config.FIGURE_DIR / "shap_importance.png", bbox_inches="tight", dpi=110)
     plt.close()
 
-    # ---- local: reason codes for example high-risk customers ---------------
+    # local: reason codes for example high-risk customers
     base = explainer.expected_value
     base = base[1] if isinstance(base, (list, np.ndarray)) and np.ndim(base) else base
     pred_logit = base + sv.sum(1)
@@ -73,7 +68,7 @@ def main(args) -> None:
         print(f"\nCustomer {df.iloc[idx[r]][config.ID_COL][:12]}...  "
               f"actual default={y[r]}")
         for i in top:
-            print(f"   +{contrib[i]:.3f}  {feature_cols[i]} = {X.iloc[r, i]:.3f}")
+            print(f"   +{contrib[i]:.3f}  {feature_cols[i]} = {features.iloc[r, i]:.3f}")
 
     print("\nSaved: shap_summary.png, shap_importance.png")
 

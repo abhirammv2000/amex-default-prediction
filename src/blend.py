@@ -1,13 +1,8 @@
-"""Blend the tuned LightGBM and XGBoost models.
+"""Blend the tuned LightGBM and XGBoost models: final = w * lgb + (1 - w) * xgb.
 
-Finds the blend weight ``w`` that maximises the Amex metric on the aligned
-out-of-fold (OOF) predictions, then applies the same ``w`` to the two models'
-test predictions to produce the final submission. Because both models use the
-same fold split, their OOF rows align by ``customer_ID``.
+It picks the w that gives the best Amex metric on the out-of-fold predictions (both models use the same folds, so the
+rows line up by customer_ID) and applies it to the test predictions.
 
-    final = w * lgb + (1 - w) * xgb
-
-Usage:
     python blend.py
 """
 from __future__ import annotations
@@ -30,7 +25,7 @@ def _load_oof(path):
 
 def main() -> None:
     t0 = time.time()
-    # ---- align OOF predictions ---------------------------------------------
+    # align OOF predictions
     lgb_oof = _load_oof(config.PROCESSED_DIR / "oof_predictions.parquet")
     xgb_oof = _load_oof(config.PROCESSED_DIR / "oof_xgb.parquet")
     assert (lgb_oof.index == xgb_oof.index).all(), "OOF customer_IDs misaligned"
@@ -40,7 +35,7 @@ def main() -> None:
     s_lgb = amex_metric_np(y, p_lgb)
     s_xgb = amex_metric_np(y, p_xgb)
 
-    # ---- search the blend weight on OOF ------------------------------------
+    # search the blend weight on OOF
     best_w, best_s = 1.0, s_lgb
     for w in np.linspace(0, 1, 51):
         s = amex_metric_np(y, w * p_lgb + (1 - w) * p_xgb)
@@ -49,30 +44,28 @@ def main() -> None:
     print(f"OOF  LGB={s_lgb:.5f}  XGB={s_xgb:.5f}  "
           f"BLEND(w={best_w:.2f})={best_s:.5f}")
 
-    # ---- predict test with both model sets and blend -----------------------
+    # predict test with both model sets and blend
     test = pd.read_parquet(config.TEST_FEATURES)
     ids = test[config.ID_COL]
     feats = [c for c in test.columns if c != config.ID_COL]
-    X = test[feats]
-    print(f"Scoring {len(X):,} test customers ... ({time.time() - t0:.0f}s)")
+    features = test[feats]
+    print(f"Scoring {len(features):,} test customers ... ({time.time() - t0:.0f}s)")
 
     lgb_models = sorted(config.MODEL_DIR.glob("lgbm_fold*.txt"))
-    p_test_lgb = np.zeros(len(X))
+    p_test_lgb = np.zeros(len(features))
     for m in lgb_models:
-        p_test_lgb += lgb.Booster(model_file=str(m)).predict(X) / len(lgb_models)
+        p_test_lgb += lgb.Booster(model_file=str(m)).predict(features) / len(lgb_models)
 
-    # Predict XGB in row-chunks: a single DMatrix over all 924K x 1628 float32
-    # rows exhausts 16 GB RAM, so build it ~150K rows at a time from numpy.
+    # predict XGB in chunks, one DMatrix over all 924K x 1628 rows runs out of 16 GB, so 150K rows at a time
     xgb_models = sorted(config.MODEL_DIR.glob("xgb_fold*.json"))
     boosters = []
     for m in xgb_models:
         b = xgb.Booster(); b.load_model(str(m)); boosters.append(b)
-    p_test_xgb = np.zeros(len(X))
+    p_test_xgb = np.zeros(len(features))
     chunk = 150_000
-    for start in range(0, len(X), chunk):
-        block = X.iloc[start:start + chunk].to_numpy(dtype=np.float32)
-        # Models were trained from a named DataFrame, so the DMatrix needs the
-        # same feature_names (numpy arrays carry none).
+    for start in range(0, len(features), chunk):
+        block = features.iloc[start:start + chunk].to_numpy(dtype=np.float32)
+        # the models were trained on a named dataframe, so the DMatrix needs the same feature_names
         dblock = xgb.DMatrix(block, feature_names=feats)
         for b in boosters:
             p_test_xgb[start:start + len(block)] += b.predict(dblock) / len(boosters)

@@ -2,8 +2,8 @@
 
 A FastAPI app that scores customers from their raw monthly statements and
 returns a calibrated probability of default, a risk band, and SHAP-based
-adverse-action reason codes. The feature engineering is the *same* code used in
-training (app.pipeline) — no training/serving skew.
+adverse-action reason codes. The feature engineering is the *same* code used
+in training (app.pipeline), so there's no training/serving skew.
 """
 from __future__ import annotations
 

@@ -1,9 +1,9 @@
 """Extract each customer's last statement date from the train Parquet.
 
 Needed for out-of-time validation: we split customers by *when they were last
-observed* (their latest S_2), training on earlier customers and testing on later
-ones — the realistic way to validate a credit model (will it hold up on future
-applicants?). Output: data/processed/customer_dates.parquet.
+observed* (their latest S_2), training on earlier customers and testing on
+later ones, the realistic way to validate a credit model (will it hold up on
+future applicants?). Output: data/processed/customer_dates.parquet.
 """
 from __future__ import annotations
 

@@ -14,7 +14,7 @@ import time
 
 from prometheus_client import Counter, Histogram
 
-# --- structured JSON logging ------------------------------------------------
+# structured JSON logging
 _handler = logging.StreamHandler(sys.stdout)
 
 
@@ -33,7 +33,7 @@ logger.setLevel(logging.INFO)
 logger.handlers = [_handler]
 logger.propagate = False
 
-# --- Prometheus metrics -----------------------------------------------------
+# Prometheus metrics
 REQUESTS = Counter("amex_score_requests_total", "Score requests", ["endpoint"])
 CUSTOMERS = Counter("amex_scored_customers_total", "Customers scored")
 LATENCY = Histogram("amex_score_latency_seconds", "Scoring latency", ["endpoint"])

@@ -65,10 +65,10 @@ class CreditModel:
               with_reasons: bool = True) -> list[dict]:
         """Score a batch of customers; returns PD, risk band and reason codes.
 
-        ``with_reasons=False`` skips the SHAP computation — used for bulk batch
+        ``with_reasons=False`` skips the SHAP computation, used for bulk batch
         portfolio scoring, where reason codes are generated on demand (via the
-        API) only for the accounts a decision is actually made on, not for the
-        whole book on every run.
+        API) only for the accounts a decision is made on, not for the whole
+        book on every run.
         """
         feats = engineer_features(statements, self.cat_maps, self.feature_order)
         ids = feats.index.tolist()

@@ -1,15 +1,9 @@
 """Feature engineering shared by training and serving.
 
-This is the single source of truth that turns a customer's raw monthly
-statements into the exact feature vector the model was trained on. Reusing the
-*same* aggregation calls as the offline training pipeline
-(`src/feature_engineering.py`) is what prevents **training/serving skew** — the
-silent failure mode where an online model is fed subtly different features than
-it saw in training. The accompanying test (`tests/test_pipeline.py`) asserts the
-output matches the offline feature table row-for-row.
-
-The function operates on a batch of customers (groupby) so a single request and
-a bulk batch share one code path.
+It turns a customer's raw monthly statements into the feature vector the model was trained on, using the same
+aggregation calls as src/feature_engineering.py so the online model never sees different features than it trained
+on (training/serving skew). tests/test_pipeline.py checks the output matches the offline table row for row. It
+works on a batch of customers, so one request and a bulk batch use the same code.
 """
 from __future__ import annotations
 
@@ -33,13 +27,10 @@ def _flatten(agg: pd.DataFrame) -> pd.DataFrame:
 
 def engineer_features(statements: pd.DataFrame, cat_maps: dict,
                       feature_order: list[str]) -> pd.DataFrame:
-    """Aggregate raw statements -> one feature row per customer.
+    """One row of features per customer from the raw statement rows (customer_ID, S_2 and the 188 columns).
 
-    Parameters
-    ----------
-    statements : raw statement rows (customer_ID, S_2, and the 188 features).
-    cat_maps   : {categorical -> [category strings in code order]} fit on train.
-    feature_order : canonical training column order; output is reindexed to it.
+    cat_maps is {categorical: [category strings in code order]} fit on train, and the output is put in
+    feature_order, the training column order.
     """
     df = statements.copy()
     df[DATE_COL] = pd.to_datetime(df[DATE_COL])
@@ -47,15 +38,14 @@ def engineer_features(statements: pd.DataFrame, cat_maps: dict,
     df = df.sort_values([ID_COL, DATE_COL])
 
     feat_cols = [c for c in df.columns if c not in (ID_COL, DATE_COL)]
-    # Only aggregate columns actually present in the request; any column the model
-    # expects but the caller omitted is filled with NaN by the final reindex
-    # (LightGBM handles NaN natively), so partial requests are tolerated.
+    # only aggregate the columns in the request. Anything the model expects but is missing becomes NaN in
+    # the final reindex, which LightGBM handles, so partial requests work
     cat_cols = [c for c in CATEGORICAL_FEATURES if c in feat_cols]
     num_cols = [c for c in feat_cols if c not in cat_cols]
     g = df.groupby(ID_COL, sort=True)
     parts = []
 
-    # --- numeric aggregations + trend/deviation diffs (identical to training) -
+    # numeric aggregates and trend features, same as training
     if num_cols:
         num = _flatten(g[num_cols].agg(NUM_AGGS).astype(np.float32))
         diffs = {}
@@ -66,7 +56,7 @@ def engineer_features(statements: pd.DataFrame, cat_maps: dict,
             diffs[f"{c}_range"] = (num[f"{c}_max"] - num[f"{c}_min"]).astype(np.float32)
         parts.append(pd.concat([num, pd.DataFrame(diffs, index=num.index)], axis=1))
 
-    # --- categorical aggregations; encode 'last' with the train-fit maps ------
+    # categorical aggregates, encoding the last value with the maps fit on train
     if cat_cols:
         cat = _flatten(g[cat_cols].agg(CAT_AGGS))
         for c in cat_cols:
@@ -79,7 +69,7 @@ def engineer_features(statements: pd.DataFrame, cat_maps: dict,
         cat[num_like] = cat[num_like].astype(np.float32)
         parts.append(cat)
 
-    # --- date-derived: statement count + history span in days ----------------
+    # statement count and days of history
     span = g[DATE_COL].agg(["count", "min", "max"])
     span["history_days"] = (span["max"] - span["min"]).dt.days.astype(np.float32)
     span = span.rename(columns={"count": "statement_count"})[
@@ -87,6 +77,5 @@ def engineer_features(statements: pd.DataFrame, cat_maps: dict,
     parts.append(span)
 
     features = pd.concat(parts, axis=1)
-    # Reindex to the exact training column order (and fill any column the model
-    # expects but this slice didn't produce — defensive, should not happen).
+    # put the columns in training order (fills any the model expects but we didn't make, which shouldn't happen)
     return features.reindex(columns=feature_order)

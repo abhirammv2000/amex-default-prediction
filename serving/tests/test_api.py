@@ -43,7 +43,7 @@ def _sample_request(n_customers: int = 2) -> dict:
 
 
 def _synthetic_request() -> dict:
-    """A customer with 3 statements and a few raw features — no data files needed
+    """A customer with 3 statements and a few raw features, no data files needed
     (missing features become NaN, which the model handles). Runs in CI."""
     base = {"customer_ID": "synthetic_0001"}
     stmts = []

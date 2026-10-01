@@ -1,19 +1,11 @@
 """5-fold GRU over the raw monthly statement sequences.
 
-A bidirectional GRU reads each customer's padded ``[13, F]`` sequence (packed so
-padding is ignored) and predicts default from the final hidden state. It uses the
-**same StratifiedKFold split** as the LightGBM / XGBoost models, so its OOF
-predictions align row-for-row and can be blended. Early stopping is on the
-official Amex metric.
+A bidirectional GRU reads each customer's padded [13, F] sequence (packed so the padding is ignored) and predicts default
+from the last hidden state. It uses the same StratifiedKFold split as LightGBM and XGBoost, so the out-of-fold predictions
+line up and can be blended, and early stopping is on the Amex metric. It's there to try the time signal and add
+diversity to the blend, not as the production model (the GBDTs are). Writes data/processed/oof_gru.parquet, the fold
+models and cv_metadata_gru.json, and gru_test_pred.parquet if seq_test.npz exists.
 
-This is an *exploration of temporal signal + ensemble diversity*, not the
-production model — GBDTs remain the model of record (see README).
-
-Outputs: data/processed/oof_gru.parquet, outputs/models/gru_fold*.pt,
-outputs/models/cv_metadata_gru.json; if seq_test.npz exists, a test prediction
-file data/processed/gru_test_pred.parquet.
-
-Usage:
     python train_gru.py --epochs 20 --batch 1024 --hidden 128
 """
 from __future__ import annotations
@@ -133,7 +125,7 @@ def main(args) -> None:
         "fold_scores": [float(s) for s in fold_scores],
         "n_features": int(n_feat), "params": vars(args)}, indent=2))
 
-    # --- optional test inference --------------------------------------------
+    # optional test inference
     test_path = config.PROCESSED_DIR / "seq_test.npz"
     if test_path.exists():
         td = np.load(test_path, allow_pickle=True)

@@ -2,7 +2,7 @@
 
 A human-facing surface over the deployed model: pick a customer, see their
 calibrated probability of default, the risk band, and the SHAP reason codes
-behind the score — and run "what-if" scenarios on the latest statement. This is
+behind the score, and run "what-if" scenarios on the latest statement. This is
 the on-demand, single-account view a risk analyst would use (the portfolio is
 scored in batch; see serving/app/batch_score.py). It calls the *same*
 CreditModel and feature pipeline as the API, so the numbers match production.
@@ -33,7 +33,7 @@ def get_model() -> CreditModel:
 
 @st.cache_data
 def get_samples():
-    # JSON (not parquet) so the small preset bundle ships inside the image —
+    # JSON (not parquet) so the small preset bundle ships inside the image.
     # *.parquet is git-ignored and would be stripped from the build context.
     df = pd.read_json(DEMO / "sample_customers.json")
     meta = json.loads((DEMO / "sample_meta.json").read_text())
@@ -51,7 +51,7 @@ st.caption(
     "anonymized statements. The portfolio is scored in **batch**; this is the "
     "on-demand single-account view.")
 
-# --- sidebar: choose a customer + what-if sliders ---------------------------
+# sidebar: choose a customer + what-if sliders
 st.sidebar.header("Customer")
 labels = [m["label"] for m in meta]
 choice = st.sidebar.selectbox("Profile (real test customers)", labels, index=2)
@@ -78,7 +78,7 @@ result = model.score(mod)[0]
 pd_pct = result["probability_of_default"] * 100
 band = result["risk_band"]
 
-# --- top row: gauge + band + reason codes -----------------------------------
+# top row: gauge + band + reason codes
 left, right = st.columns([1, 1.3])
 with left:
     gauge = go.Figure(go.Indicator(
@@ -97,7 +97,7 @@ with left:
                 unsafe_allow_html=True)
 
 with right:
-    st.subheader("Why — top risk drivers (SHAP)")
+    st.subheader("Why: top risk drivers (SHAP)")
     reasons = result["top_reason_codes"]
     if reasons:
         rdf = pd.DataFrame(reasons).iloc[::-1]
@@ -108,9 +108,9 @@ with right:
                           xaxis_title="contribution to risk (log-odds)")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No features are pushing this customer toward default — low risk.")
+        st.info("No features are pushing this customer toward default: low risk.")
 
-# --- bottom: the customer's payment trajectory ------------------------------
+# bottom: the customer's payment trajectory
 st.subheader("Payment trajectory (P_2 over the last 13 statements)")
 traj = cust[[DATE_COL, "P_2"]].copy()
 traj[DATE_COL] = pd.to_datetime(traj[DATE_COL]).dt.strftime("%Y-%m")

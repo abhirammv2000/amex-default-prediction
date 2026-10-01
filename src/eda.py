@@ -1,14 +1,7 @@
-"""Exploratory data analysis -> saves figures to outputs/figures/.
-
-Runs on a customer-level sample so it is fast and memory-light. The target
-distribution uses the full (30 MB) labels file. Figures produced:
-
-  1. target_distribution.png   - class balance
-  2. statements_per_customer.png
-  3. missingness.png           - share of features by missing-rate bucket
-  4. feature_groups.png        - feature counts by prefix (B/D/P/R/S)
-  5. p2_by_target.png          - P_2 (a key payment feature) last value vs target
-"""
+"""Exploratory analysis, saves figures to outputs/figures/. It runs on a sample of customers to stay fast, but the target
+distribution uses the full labels file. The figures are target_distribution.png, statements_per_customer.png, missingness.png
+(features by missing-rate bucket), feature_groups.png (feature counts by prefix B, D, P, R, S) and p2_by_target.png (the last
+P_2 value against the target)."""
 from __future__ import annotations
 
 import matplotlib
@@ -26,7 +19,7 @@ plt.rcParams["savefig.bbox"] = "tight"
 def main(sample_rows: int = 600_000) -> None:
     fig_dir = config.FIGURE_DIR
 
-    # ---- target distribution (full labels) ---------------------------------
+    # target distribution (full labels)
     labels = pd.read_csv(config.TRAIN_LABELS_CSV)
     rate = labels["target"].mean()
     fig, ax = plt.subplots(figsize=(5, 4))
@@ -41,7 +34,7 @@ def main(sample_rows: int = 600_000) -> None:
     plt.close(fig)
     print(f"target: {len(labels):,} customers, default rate {rate:.4f}")
 
-    # ---- sample of statements ----------------------------------------------
+    # sample of statements
     print(f"reading first {sample_rows:,} rows for EDA sample ...")
     # read numeric columns as float32 to roughly halve the sample's footprint
     header = pd.read_csv(config.TRAIN_CSV, nrows=0).columns.tolist()
@@ -51,7 +44,7 @@ def main(sample_rows: int = 600_000) -> None:
     df[config.DATE_COL] = pd.to_datetime(df[config.DATE_COL])
     feat_cols = [c for c in df.columns if c not in config.NON_FEATURE_COLS]
 
-    # ---- statements per customer -------------------------------------------
+    # statements per customer
     spc = df.groupby(config.ID_COL).size()
     fig, ax = plt.subplots(figsize=(6, 4))
     spc.value_counts().sort_index().plot(kind="bar", color="#55A868", ax=ax)
@@ -61,7 +54,7 @@ def main(sample_rows: int = 600_000) -> None:
     fig.savefig(fig_dir / "statements_per_customer.png")
     plt.close(fig)
 
-    # ---- missingness --------------------------------------------------------
+    # missingness
     miss = df[feat_cols].isna().mean()
     buckets = pd.cut(miss, [-0.01, 0.0, 0.1, 0.3, 0.5, 0.9, 1.01],
                      labels=["0%", "0-10%", "10-30%", "30-50%", "50-90%", ">90%"])
@@ -73,7 +66,7 @@ def main(sample_rows: int = 600_000) -> None:
     fig.savefig(fig_dir / "missingness.png")
     plt.close(fig)
 
-    # ---- feature groups -----------------------------------------------------
+    # feature groups
     prefixes = pd.Series([c.split("_")[0] for c in feat_cols]).value_counts()
     mapping = {"B": "Balance", "D": "Delinquency", "P": "Payment",
                "R": "Risk", "S": "Spend"}
@@ -85,7 +78,7 @@ def main(sample_rows: int = 600_000) -> None:
     fig.savefig(fig_dir / "feature_groups.png")
     plt.close(fig)
 
-    # ---- P_2 (last) vs target ----------------------------------------------
+    # P_2 (last) vs target
     last = df.sort_values(config.DATE_COL).groupby(config.ID_COL)["P_2"].last()
     merged = last.to_frame("P_2_last").merge(
         labels.set_index(config.ID_COL), left_index=True, right_index=True)

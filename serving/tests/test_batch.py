@@ -1,4 +1,4 @@
-"""Batch scorer test — runs the job on a tiny synthetic portfolio (no data
+"""Batch scorer test. Runs the job on a tiny synthetic portfolio (no data
 files needed) and checks the output contract."""
 from __future__ import annotations
 

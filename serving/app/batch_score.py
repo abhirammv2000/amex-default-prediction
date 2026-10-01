@@ -1,21 +1,12 @@
-"""Batch portfolio scoring — the primary deployment for behavioural credit risk.
+"""Batch scoring of a whole portfolio.
 
-Behavioural default models are scored in **batch**, not real time: the inputs
-(monthly statements) update once per cycle, and the decisions they feed
-(credit-line reviews, risk-based pricing, collections, IFRS 9 / CECL
-provisioning) are periodic portfolio runs. This job reads a portfolio of raw
-statements, scores every customer with the *same* model and feature code as the
-online API (`app.model` / `app.pipeline` — so no skew), and writes
-`customer_ID, probability_of_default, risk_band` predictions.
+Behavioural default models are usually scored in batch, since the statements update once a cycle and the decisions
+they feed (credit line reviews, pricing, collections, provisioning) are periodic runs. This reads raw statements,
+scores every customer with the same model and feature code as the API (app.model and app.pipeline, so no skew) and
+writes customer_ID, probability_of_default and risk_band. It streams the input and scores in chunks of whole
+customers, so any size fits in memory. Reason codes are skipped here, the API makes them on demand. It's meant to run
+as a Cloud Run Job and reads and writes local or gs:// paths.
 
-It streams the input in row batches and scores in customer-contiguous chunks, so
-an arbitrarily large portfolio fits in memory. Reason codes are skipped in bulk
-(generated on demand via the API for accounts a decision is made on).
-
-Designed to run as a scheduled **Cloud Run Job**; reads/writes local or `gs://`
-paths.
-
-Usage:
     python -m app.batch_score --input portfolio.parquet --output scores.parquet
 """
 from __future__ import annotations

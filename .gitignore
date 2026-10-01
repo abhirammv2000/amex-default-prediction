@@ -1,4 +1,4 @@
-# ---- Data (huge — never commit) ----
+# ---- Data (huge, never commit) ----
 amex-default-prediction/
 data/
 *.csv

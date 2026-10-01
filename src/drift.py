@@ -1,20 +1,14 @@
-"""Train -> test population stability (drift) monitoring with PSI.
+"""Drift between train and test, measured with PSI.
 
-Every training customer is observed at the same point (March 2018), so a classic
-out-of-time split is not available *in-sample*. The **test** set, however, is
-drawn from a later period, so train -> test is a genuine out-of-time comparison
-of the input population — exactly what a deployed credit model monitors.
+Every training customer is observed at the same time (March 2018), so there is no out-of-time split inside the
+training data. The test set comes from a later period, so train against test is an out-of-time comparison of the
+inputs, which is what a deployed model has to watch. PSI is computed per feature and for the score:
 
-We compute the Population Stability Index (PSI) per feature and for the model's
-score distribution:
+    PSI = sum over bins of (test% - train%) * ln(test% / train%)
 
-    PSI = sum_b (test%_b - train%_b) * ln(test%_b / train%_b)
+Under 0.10 is stable, 0.10 to 0.25 a moderate shift, over 0.25 a significant one. Writes reports/figures/score_drift.png
+and reports/drift_psi.csv.
 
-Rule of thumb: < 0.10 stable, 0.10-0.25 moderate shift, > 0.25 significant shift.
-
-Outputs: reports/figures/score_drift.png, reports/drift_psi.csv, printed summary.
-
-Usage:
     python drift.py --sample 80000
 """
 from __future__ import annotations
@@ -32,7 +26,7 @@ import config
 
 
 def psi(expected, actual, bins=10) -> float:
-    """PSI of `actual` vs a `expected` reference, using expected-quantile bins."""
+    """PSI of actual against an expected reference, with bins taken from the expected quantiles."""
     expected = expected[~np.isnan(expected)]
     actual = actual[~np.isnan(actual)]
     if len(expected) == 0 or len(actual) == 0:
@@ -63,7 +57,7 @@ def main(args) -> None:
     tr = _sample(config.TRAIN_FEATURES, args.sample)
     te = _sample(config.TEST_FEATURES, args.sample)
 
-    # ---- feature PSI --------------------------------------------------------
+    # feature PSI
     rows = []
     for c in feats:
         rows.append((c, psi(tr[c].to_numpy(float), te[c].to_numpy(float))))
@@ -81,7 +75,7 @@ def main(args) -> None:
     print("\nMost-drifted features:")
     print(psi_df.head(10).to_string(index=False))
 
-    # ---- score PSI: train OOF preds vs test preds --------------------------
+    # score PSI: train OOF preds vs test preds
     train_scores = pd.read_parquet(config.PROCESSED_DIR / "oof_predictions.parquet")["oof_pred"].to_numpy()
     sub = config.SUBMISSION_DIR / "submission_lgbm_baseline.csv"
     score_psi = np.nan
@@ -100,9 +94,9 @@ def main(args) -> None:
         fig.savefig(config.FIGURE_DIR / "score_drift.png", bbox_inches="tight")
         plt.close(fig)
 
-    verdict = ("stable — the random-CV estimate should transfer to the test period"
+    verdict = ("stable, the random-CV estimate should transfer to the test period"
                if shifted < 0.05 and (np.isnan(score_psi) or score_psi < 0.1)
-               else "some drift — monitor / consider recalibration")
+               else "some drift, monitor or consider recalibration")
     print(f"\nVerdict: population is {verdict}.")
     print("Saved: drift_psi.csv, score_drift.png")
 

@@ -1,12 +1,7 @@
-"""Train the LightGBM baseline with 5-fold stratified cross-validation.
+"""LightGBM baseline with 5-fold stratified CV. It loads the feature table, joins the labels and trains a model per fold with
+early stopping on the Amex metric. It saves the fold models, the out-of-fold predictions, the CV score and a feature
+importance table.
 
-Loads the engineered per-customer feature table, joins the labels, and trains
-one LightGBM model per fold using the official competition metric for early
-stopping. Saves per-fold models, out-of-fold (OOF) predictions, the CV score,
-and a feature-importance table.
-
-Usage
------
     python train_baseline.py
     python train_baseline.py --num-boost-round 2000 --learning-rate 0.03
 """
@@ -38,9 +33,9 @@ def load_training_data():
 def main(args) -> None:
     t0 = time.time()
     df, feature_cols, cat_features = load_training_data()
-    X = df[feature_cols]
+    features = df[feature_cols]
     y = df[config.TARGET_COL].values
-    print(f"Train matrix: {X.shape[0]:,} customers x {len(feature_cols)} features")
+    print(f"Train matrix: {features.shape[0]:,} customers x {len(feature_cols)} features")
     print(f"Default rate: {y.mean():.4f} | categorical features: {len(cat_features)}")
 
     params = {
@@ -63,10 +58,10 @@ def main(args) -> None:
     importances = np.zeros(len(feature_cols))
     fold_scores = []
 
-    for fold, (tr_idx, va_idx) in enumerate(skf.split(X, y), 1):
-        dtrain = lgb.Dataset(X.iloc[tr_idx], y[tr_idx],
+    for fold, (tr_idx, va_idx) in enumerate(skf.split(features, y), 1):
+        dtrain = lgb.Dataset(features.iloc[tr_idx], y[tr_idx],
                              categorical_feature=cat_features)
-        dvalid = lgb.Dataset(X.iloc[va_idx], y[va_idx],
+        dvalid = lgb.Dataset(features.iloc[va_idx], y[va_idx],
                              categorical_feature=cat_features)
         model = lgb.train(
             params,
@@ -79,7 +74,7 @@ def main(args) -> None:
                 lgb.log_evaluation(args.log_every),
             ],
         )
-        oof[va_idx] = model.predict(X.iloc[va_idx])
+        oof[va_idx] = model.predict(features.iloc[va_idx])
         score = amex_metric_np(y[va_idx], oof[va_idx])
         fold_scores.append(score)
         importances += model.feature_importance(importance_type="gain") / config.N_FOLDS

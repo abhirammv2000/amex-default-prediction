@@ -1,17 +1,7 @@
-"""Official American Express default-prediction competition metric.
-
-M = 0.5 * (G + D)
-
-  * G = normalized Gini coefficient
-  * D = default rate captured at 4% (recall within the top-ranked 4% of
-        predictions)
-
-For both sub-metrics the **negative** class is given a weight of 20 to undo
-the 5% negative down-sampling applied to the public dataset. Maximum score
-is 1.0.
-
-This is a faithful re-implementation of the reference metric Kaggle published
-for the competition (see Rohan Rao's "AMEX competition metric" notebook).
+"""The Amex competition metric, M = 0.5 * (G + D), where G is the normalized Gini and D is the default rate
+captured in the top 4% of predictions. Negatives get a weight of 20 in both, to undo the 5% down-sampling of
+negatives in the public data. The maximum is 1.0. It is a re-implementation of the reference metric Kaggle
+published (Rohan Rao's "AMEX competition metric" notebook).
 """
 from __future__ import annotations
 
@@ -20,7 +10,7 @@ import pandas as pd
 
 
 def _top_four_percent_captured(df: pd.DataFrame) -> float:
-    """Fraction of positives captured in the highest-ranked 4% by weight."""
+    """Share of positives in the top-ranked 4% by weight."""
     df = df.sort_values("prediction", ascending=False)
     df["weight"] = df["target"].apply(lambda x: 20 if x == 0 else 1)
     four_pct_cutoff = int(0.04 * df["weight"].sum())
@@ -50,13 +40,7 @@ def _normalized_weighted_gini(df: pd.DataFrame) -> float:
 
 
 def amex_metric(y_true, y_pred) -> float:
-    """Compute the competition metric.
-
-    Parameters
-    ----------
-    y_true, y_pred : array-like
-        Ground-truth binary labels and predicted default probabilities.
-    """
+    """The competition metric for the true 0/1 labels and the predicted default probabilities."""
     df = pd.DataFrame(
         {"target": np.asarray(y_true).ravel(), "prediction": np.asarray(y_pred).ravel()}
     )
@@ -66,14 +50,11 @@ def amex_metric(y_true, y_pred) -> float:
 
 
 def amex_metric_np(y_true, y_pred) -> float:
-    """Fast pure-NumPy implementation (identical result, much quicker).
-
-    Preferred inside training loops where the metric is evaluated often.
-    """
+    """Same result in plain numpy, much faster, so use it in training loops."""
     y_true = np.asarray(y_true).ravel()
     y_pred = np.asarray(y_pred).ravel()
 
-    # --- default rate captured at 4% ---------------------------------------
+    # default rate captured at 4%
     order = np.argsort(-y_pred)
     t = y_true[order]
     weight = np.where(t == 0, 20.0, 1.0)
@@ -82,7 +63,7 @@ def amex_metric_np(y_true, y_pred) -> float:
     mask = cum_weight <= four_pct
     d = t[mask].sum() / t.sum()
 
-    # --- normalized weighted Gini ------------------------------------------
+    # weighted gini, normalized
     def _gini(sort_key):
         o = np.argsort(-sort_key)
         tt = y_true[o]
@@ -97,6 +78,6 @@ def amex_metric_np(y_true, y_pred) -> float:
 
 
 def lgb_amex_metric(y_pred, dtrain):
-    """LightGBM custom eval: returns (name, value, is_higher_better)."""
+    """LightGBM custom eval, returns (name, value, is_higher_better)."""
     y_true = dtrain.get_label()
     return "amex", amex_metric_np(y_true, y_pred), True

@@ -1,4 +1,4 @@
-# Keep Cloud Build context tiny — never upload data or git history.
+# Keep Cloud Build context tiny: never upload data or git history.
 .git/
 amex-default-prediction/
 data/

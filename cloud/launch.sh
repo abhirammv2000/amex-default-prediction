@@ -42,7 +42,7 @@ gcloud services enable compute.googleapis.com storage.googleapis.com --quiet
 gcloud storage ls "$BUCKET" >/dev/null 2>&1 || \
   gcloud storage buckets create "$BUCKET" --location="$REGION"
 # Code is always refreshed (cheap). Each declared INPUT is uploaded only when
-# missing in the bucket (or FORCE_UPLOAD=1) — large tensors/tables don't change
+# missing in the bucket (or FORCE_UPLOAD=1); large tensors/tables don't change
 # between runs, so we don't re-ship them.
 gcloud storage cp "$HERE/src/"*.py "$BUCKET/src/"
 for rel in $INPUTS; do

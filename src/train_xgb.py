@@ -1,13 +1,7 @@
-"""Train an XGBoost model with 5-fold CV — a second model family for blending.
+"""XGBoost with 5-fold CV, as a second model to blend with LightGBM. It uses the same folds (same seed), so the out-of-fold
+predictions line up for blending (blend.py), and early stopping is on the Amex metric. Writes outputs/models/xgb_fold*.json,
+cv_metadata_xgb.json and data/processed/oof_xgb.parquet.
 
-Uses the *same* StratifiedKFold split (same seed) as the LightGBM models, so the
-out-of-fold (OOF) predictions align row-for-row and can be blended directly
-(see blend.py). Early stopping uses the official Amex metric.
-
-Outputs: outputs/models/xgb_fold*.json, outputs/models/cv_metadata_xgb.json,
-and data/processed/oof_xgb.parquet.
-
-Usage:
     python train_xgb.py
 """
 from __future__ import annotations
@@ -34,11 +28,10 @@ def xgb_amex(y_pred, dmatrix):
 def main(args) -> None:
     t0 = time.time()
     df, feature_cols, cat_features = load_training_data()
-    # XGBoost treats the label-encoded categorical 'last' codes as numeric
-    # ordinals (already int); fine for a blend partner.
-    X = df[feature_cols].astype(np.float32)
+    # xgboost reads the label-encoded categorical codes as plain numbers, which is fine for a blend partner
+    features = df[feature_cols].astype(np.float32)
     y = df[config.TARGET_COL].values
-    print(f"XGB train: {X.shape[0]:,} x {len(feature_cols)} | default {y.mean():.4f}")
+    print(f"XGB train: {features.shape[0]:,} x {len(feature_cols)} | default {y.mean():.4f}")
 
     params = {
         "objective": "binary:logistic",
@@ -57,9 +50,9 @@ def main(args) -> None:
                           random_state=config.SEED)
     oof = np.zeros(len(df))
     fold_scores = []
-    for fold, (tr, va) in enumerate(skf.split(X, y), 1):
-        dtr = xgb.DMatrix(X.iloc[tr], label=y[tr])
-        dva = xgb.DMatrix(X.iloc[va], label=y[va])
+    for fold, (tr, va) in enumerate(skf.split(features, y), 1):
+        dtr = xgb.DMatrix(features.iloc[tr], label=y[tr])
+        dva = xgb.DMatrix(features.iloc[va], label=y[va])
         model = xgb.train(
             params, dtr, num_boost_round=args.num_boost_round,
             evals=[(dva, "valid")], custom_metric=xgb_amex, maximize=True,
@@ -67,8 +60,7 @@ def main(args) -> None:
         )
         oof[va] = model.predict(dva, iteration_range=(0, model.best_iteration + 1))
         fold_scores.append(amex_metric_np(y[va], oof[va]))
-        # Persist the model truncated to its best iteration so later test
-        # predictions (which use all stored trees) match the OOF above.
+        # save the model cut at its best iteration so test predictions (all stored trees) match the OOF
         model[: model.best_iteration + 1].save_model(
             str(config.MODEL_DIR / f"xgb_fold{fold}.json"))
         print(f"[fold {fold}] amex={fold_scores[-1]:.5f} "

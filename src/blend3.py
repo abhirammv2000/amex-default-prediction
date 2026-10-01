@@ -1,14 +1,9 @@
-"""Final 3-way blend: LightGBM + XGBoost + GRU.
+"""Final blend of LightGBM, XGBoost and the GRU. It finds the weights with the best Amex metric on the out-of-fold
+predictions and applies them to the test predictions.
 
-Finds the weights that maximise the Amex metric on the aligned OOF predictions of
-the three models, then applies them to the test predictions to write the final
-submission.
-
-Test predictions reuse what already exists (no recompute):
-  * LGB test  = submission_lgbm_baseline.csv (averaged LGB folds)
-  * XGB test  = recovered algebraically from the 2-way blend submission:
-                submission_blend = 0.86*LGB + 0.14*XGB  =>  XGB = (blend - 0.86*LGB)/0.14
-  * GRU test  = gru_test_pred.parquet (from gru_predict.py)
+The test predictions are reused, not recomputed. LGB is submission_lgbm_baseline.csv (the averaged folds), GRU is
+gru_test_pred.parquet (from gru_predict.py), and XGB is worked back out of the 2-way blend submission, since
+blend = 0.86 * LGB + 0.14 * XGB.
 """
 from __future__ import annotations
 
@@ -18,7 +13,7 @@ import pandas as pd
 import config
 from metric import amex_metric_np
 
-# weights used by the committed 2-way blend (see blend.py output)
+# weights of the committed 2-way blend (from blend.py)
 W_LGB_2WAY = 0.86
 
 
@@ -27,7 +22,7 @@ def _oof(path):
 
 
 def main() -> None:
-    # ---- optimal 3-way weights on OOF --------------------------------------
+    # optimal 3-way weights on OOF
     lgb, xgb, gru = _oof("oof_predictions.parquet"), _oof("oof_xgb.parquet"), _oof("oof_gru.parquet")
     assert (lgb.index == xgb.index).all() and (lgb.index == gru.index).all()
     y = lgb["target"].values
@@ -44,7 +39,7 @@ def main() -> None:
     print(f"3-way OOF weights LGB={wl} XGB={wx} GRU={wg} -> amex={oof_score:.5f}")
     print(f"(vs 2-way 0.79294, best single LGB 0.79266)")
 
-    # ---- assemble test predictions (aligned by customer_ID) -----------------
+    # assemble test predictions (aligned by customer_ID)
     lgb_sub = pd.read_csv(config.SUBMISSION_DIR / "submission_lgbm_baseline.csv") \
         .set_index(config.ID_COL).sort_index()
     blend_sub = pd.read_csv(config.SUBMISSION_DIR / "submission_blend.csv") \

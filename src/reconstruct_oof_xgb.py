@@ -19,16 +19,16 @@ from train_baseline import load_training_data
 
 def main() -> None:
     df, feature_cols, _ = load_training_data()
-    X = df[feature_cols].astype(np.float32)
+    features = df[feature_cols].astype(np.float32)
     y = df[config.TARGET_COL].values
 
     skf = StratifiedKFold(n_splits=config.N_FOLDS, shuffle=True,
                           random_state=config.SEED)
     oof = np.zeros(len(df))
-    for fold, (_, va) in enumerate(skf.split(X, y), 1):
+    for fold, (_, va) in enumerate(skf.split(features, y), 1):
         booster = xgb.Booster()
         booster.load_model(str(config.MODEL_DIR / f"xgb_fold{fold}.json"))
-        oof[va] = booster.predict(xgb.DMatrix(X.iloc[va]))
+        oof[va] = booster.predict(xgb.DMatrix(features.iloc[va]))
         print(f"  fold {fold}: amex={amex_metric_np(y[va], oof[va]):.5f}", flush=True)
 
     out = config.PROCESSED_DIR / "oof_xgb.parquet"
